@@ -46,6 +46,16 @@ entries:
         !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
       signing_key:
         !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      # Authentik 2026.x gates every flow on this list, and it defaults to
+      # empty — which reads as a provider that exists and permits nothing. The
+      # device endpoint answers `invalid_client` with a correct client id, a
+      # correct secret and the brand flow assigned, so nothing in the error
+      # points at the actual cause. `netbird up` needs the device grant;
+      # the dashboard needs the other two.
+      grant_types:
+        - authorization_code
+        - refresh_token
+        - urn:ietf:params:oauth:grant-type:device_code
       access_code_validity: minutes=10
       sub_mode: user_id
       include_claims_in_id_token: true

@@ -274,6 +274,12 @@
             # The device-code grant needs a flow *assigned as the brand
             # default*, not merely declared. Without it CLI enrolment fails
             # while the dashboard keeps working.
+            # An empty grant_types list is a provider that permits nothing,
+            # and it is the default.
+            'device_grant': 'urn:ietf:params:oauth:grant-type:device_code' in (
+                OAuth2Provider.objects.filter(
+                    client_id='<{ netbird-oidc-client-id }>'
+                ).values_list('grant_types', flat=True).first() or []),
             'device_code_flow': Brand.objects.filter(
                 domain='<{ netbird-authentik-host }>',
                 flow_device_code__isnull=False).count() == 1,
