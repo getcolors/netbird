@@ -1,0 +1,7 @@
+.*
+!.envrc
+!.gitignore
+!.nojekyll
+!.github
+node_modules/
+dist/

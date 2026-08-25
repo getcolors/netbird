@@ -1,0 +1,7 @@
+[Unit]
+Description=Back up the NetBird control plane to R2
+OnFailure=netbird-backup-failure.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/netbird-backup

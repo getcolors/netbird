@@ -1,0 +1,125 @@
+# Example desired state for a netbird deployment. Non-secret values only.
+# Credentials belong in the gitignored .envrc.private as COLORS_PAR_* variables.
+# Never export COLORS_PAR_PROFILE: it selects a deployment's remote state.
+#
+# Required credentials:
+#   Vultr           COLORS_PAR_VULTR_API_KEY
+#   Cloudflare      COLORS_PAR_CLOUDFLARE_API_TOKEN
+#   state in R2     COLORS_PAR_R2_ACCESS_KEY_ID
+#                   COLORS_PAR_R2_SECRET_ACCESS_KEY
+#   backups in R2   COLORS_PAR_NETBIRD_BACKUP_R2_ACCESS_KEY_ID
+#                   COLORS_PAR_NETBIRD_BACKUP_R2_SECRET_ACCESS_KEY
+#   backup crypto   COLORS_PAR_NETBIRD_BACKUP_RECOVERY_KEY
+#   accounts        COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD
+#                   COLORS_PAR_NETBIRD_AUTHENTIK_BOOTSTRAP_PASSWORD
+#
+# Everything else this deployment holds is generated on the server and supplied
+# by nobody: the relay secret, the session cookie key, the store encryption
+# key, Authentik's SECRET_KEY and database password, the OIDC client secret,
+# and the durable automation token. The backup recovery key is the deliberate
+# exception — a key generated on the server would be lost with the server it
+# protects, so the operator supplies it and keeps it off-host.
+
+profile: netbird-example
+workdir: .colors
+
+provider-compute: vultr
+provider-dns: cloudflare
+provider-backend: r2
+
+# Preserve this guard in committed desired state. Destruction requires an
+# explicitly authorized one-run override; never edit this flag to bypass it.
+compute-prevent-destroy: true
+
+# --- NetBird -----------------------------------------------------------------
+
+# The control plane. One host carries the dashboard, the management and signal
+# gRPC streams, the relay WebSocket, the REST API and the embedded Dex IdP —
+# the combined server multiplexes them all behind Traefik on 443.
+netbird-host: netbird.example.com
+
+# Authentik gets its own name on the same zone, routed by Traefik directly.
+# The upstream article instead tunnels it through NetBird's own reverse proxy
+# via a sidecar client; that cannot be converged and is circular. See CLAUDE.md.
+netbird-authentik-host: authentik.example.com
+
+netbird-letsencrypt-email: admin@example.com
+
+# The account that ends up owning this NetBird installation. It must sign in
+# through Authentik once before ownership can transfer to it; until then the
+# bootstrap administrator below stays owner and `./green create` says so.
+netbird-owner-email: admin@example.com
+
+# The break-glass administrator, created through the embedded IdP during
+# bootstrap and deliberately kept afterwards. It is the way back in when
+# Authentik is unavailable, which is exactly when an Authentik-only account is
+# no use. Its password is COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD.
+netbird-bootstrap-email: breakglass@example.com
+netbird-bootstrap-name: Break Glass
+
+# Authentik's own first administrator (akadmin). Its password and API token are
+# supplied only while Authentik has never been initialised, then removed from
+# the running stack and the token revoked.
+netbird-authentik-bootstrap-email: admin@example.com
+
+# The OAuth2 client id declared in the Authentik blueprint and handed to
+# NetBird's identity-providers API. The id may be deterministic; the secret
+# beside it is generated per host and never leaves it.
+netbird-oidc-client-id: netbird
+
+netbird-stun-port: 3478
+netbird-log-level: info
+netbird-docker-subnet: 172.30.0.0/24
+
+# Container images, one key per service. Explicit tags are mandatory: this
+# package owns its templates rather than following the upstream installer, so
+# nothing tells it when a floating tag moves underneath it.
+netbird-server-image: netbirdio/netbird-server:0.77.1
+netbird-dashboard-image: netbirdio/dashboard:v2.91.1
+netbird-client-image: netbirdio/netbird:0.77.1
+netbird-traefik-image: traefik:v3.7.11
+netbird-authentik-image: ghcr.io/goauthentik/server:2026.8.0
+netbird-authentik-postgres-image: postgres:16.15
+netbird-authentik-redis-image: redis:7.4.11
+
+# --- Backups -----------------------------------------------------------------
+
+# The whole restore set: the peer store, Authentik's database, the generated
+# secrets, Traefik's ACME state. Encrypted on the host before upload, written
+# under an immutable timestamped key, and only then pointed at by
+# `latest-known-good`.
+netbird-backup-dir: /var/backups/netbird
+netbird-backup-r2-bucket: netbird-backup
+netbird-backup-r2-endpoint: https://example.eu.r2.cloudflarestorage.com
+netbird-backup-r2-region: auto
+netbird-backup-oncalendar: "*-*-* 02:30:00"
+netbird-backup-retention-days: 7
+
+# --- Vultr -------------------------------------------------------------------
+
+# No vultr-name: the Compute Name Standard names the machine and its firewall
+# after the profile. Set it only for an account whose naming policy the profile
+# cannot satisfy.
+vultr-region: ams
+vultr-plan: vc2-4c-8gb
+vultr-os-id: 2284
+
+# No vultr-ssh-keys: keygen mode, where the package generates and owns
+# ~/.ssh/<profile> and registers the account key resource named after the
+# profile. Supplying vultr-ssh-keys switches to opt-out mode and the package
+# then touches no key material at all.
+
+vultr-ssh-sources:
+  - 0.0.0.0/0
+vultr-http-sources:
+  - 0.0.0.0/0
+# STUN. The only UDP published: the combined server bundles it, so there is no
+# coturn container and no legacy 49152-65535 relay range — relayed traffic
+# rides the WebSocket on 443.
+vultr-stun-sources:
+  - 0.0.0.0/0
+
+# --- R2 state backend ---------------------------------------------------------
+
+r2-bucket: tofu-state-example
+r2-endpoint: https://example.eu.r2.cloudflarestorage.com

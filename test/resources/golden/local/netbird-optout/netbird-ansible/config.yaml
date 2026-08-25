@@ -1,0 +1,41 @@
+# Combined NetBird server configuration: management, signal, relay and STUN.
+#
+# The three secrets below are read from files generated once on this host and
+# substituted by the playbook at install time, never rendered into .colors/.
+# Regenerating any of them breaks a working deployment silently: a new store
+# encryption key orphans the database, a new session cookie key logs everyone
+# out, a new relay secret breaks relayed peers while the dashboard stays green.
+server:
+  listenAddress: ":80"
+  exposedAddress: "https://netbird.example.com:443"
+  stunPorts:
+    - 3478
+  metricsPort: 9090
+  healthcheckAddress: ":9000"
+  logLevel: "info"
+  logFile: "console"
+
+  authSecret: "__RELAY_AUTH_SECRET__"
+  dataDir: "/var/lib/netbird"
+
+  auth:
+    # The embedded Dex IdP. It stays configured because it is what the
+    # break-glass administrator authenticates against when Authentik is down;
+    # Authentik is added alongside it at runtime through
+    # `POST /api/identity-providers`, not here.
+    issuer: "https://netbird.example.com/oauth2"
+    signKeyRefreshEnabled: true
+    sessionCookieEncryptionKey: "__SESSION_COOKIE_ENCRYPTION_KEY__"
+    dashboardRedirectURIs:
+      - "https://netbird.example.com/nb-auth"
+      - "https://netbird.example.com/nb-silent-auth"
+    cliRedirectURIs:
+      - "http://localhost:53000/"
+
+  reverseProxy:
+    trustedHTTPProxies:
+      - "172.30.0.0/24"
+
+  store:
+    engine: "sqlite"
+    encryptionKey: "__DATASTORE_ENCRYPTION_KEY__"

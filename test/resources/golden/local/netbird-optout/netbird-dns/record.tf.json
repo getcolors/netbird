@@ -1,0 +1,22 @@
+{
+  "resource" : {
+    "cloudflare_dns_record" : {
+      "authentik" : {
+        "content" : "192.0.2.10",
+        "name" : "authentik.example.com",
+        "proxied" : false,
+        "ttl" : 60,
+        "type" : "A",
+        "zone_id" : "${data.cloudflare_zone.zone.id}"
+      },
+      "netbird" : {
+        "content" : "192.0.2.10",
+        "name" : "netbird.example.com",
+        "proxied" : false,
+        "ttl" : 60,
+        "type" : "A",
+        "zone_id" : "${data.cloudflare_zone.zone.id}"
+      }
+    }
+  }
+}

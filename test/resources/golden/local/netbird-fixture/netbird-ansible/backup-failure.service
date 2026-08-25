@@ -1,0 +1,8 @@
+[Unit]
+Description=Record a failed NetBird backup
+
+# Local, queryable status — not delivered alerting. `netbird-status` reads it
+# and `systemctl is-failed netbird-backup.service` is the other way in.
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ > /etc/netbird/state/backup-failed'

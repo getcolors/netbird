@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Provision a self-hosted NetBird control plane with Authentik as its identity provider — Traefik, the combined netbird-server, the dashboard and Authentik — on one Vultr instance.">
+  <title>NetBird Package Skill — getcolors</title>
+  <style>
+    :root{color-scheme:light;--ink:#1f2328;--muted:#59636e;--line:#d0d7de;--soft:#f6f8fa;--blue:#0969da;--green:#1a7f37;--warn:#9a6700}*{box-sizing:border-box}body{margin:0;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:64px 28px 100px}h1{font-size:52px;line-height:1.05;margin:0}h2{margin-top:54px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{margin-top:30px}.lead{font-size:20px;color:var(--muted);max-width:790px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{padding:18px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--soft)}:not(pre)>code{padding:.12em .35em;border-radius:5px;background:var(--soft)}a{color:var(--blue)}.eyebrow{color:var(--green);font-weight:700;letter-spacing:.08em}.callout{padding:16px 18px;border-left:4px solid var(--green);background:#dafbe1}.warning{border-color:var(--warn);background:#fff8c5}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{padding:18px;border:1px solid var(--line);border-radius:8px}.card h3{margin-top:0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:8px 10px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--soft)}@media(max-width:650px){main{padding-top:38px}.grid{grid-template-columns:1fr}h1{font-size:40px}}
+  </style>
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-4VKP1WY4QJ"></script>
+  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-4VKP1WY4QJ',{page_title:'NetBird Package Skill — getcolors'});</script>
+<script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>
+</head>
+<body><main>
+  <p class="eyebrow">GREEN PACKAGE SKILL · VULTR · NETBIRD · AUTHENTIK</p>
+  <h1>NetBird Package Skill</h1>
+  <p class="lead">A reproducible Green workflow for a self-hosted NetBird control plane and its identity provider — Traefik, the combined <code>netbird-server</code>, the dashboard and Authentik — behind Cloudflare on a guarded Vultr instance.</p>
+
+  <div class="callout"><strong>One process, four services.</strong> Management, signal, relay and STUN are a single <code>netbird-server</code> multiplexed behind Traefik on 443, so the firewall opens 22, 80, 443 and one UDP port — and nothing else. Authentik gets its own hostname through the same Traefik, rather than the sidecar-and-routing-peer tunnel the upstream guide builds by hand: that needs a setup key which only exists after a human has logged in, and it makes NetBird's auth callbacks depend on a service reachable only through NetBird.</div>
+
+  <h2>Quick start</h2>
+  <pre><code>npx skills add getcolors/netbird
+cp .agents/skills/package-netbird-green/green ./green
+chmod +x green
+./green build
+./green create --dry-run</code></pre>
+  <p>Build renders reproducible output and dry-run walks the workflow without provider side effects. Real creation and deletion require explicit authorization.</p>
+
+  <h2>Architecture</h2>
+  <div class="grid">
+    <div class="card"><h3>Compute</h3><p>One Vultr instance and a firewall opening 22, 80 and 443. In keygen mode the account SSH key resource is named after the profile and lives in this deployment's state.</p></div>
+    <div class="card"><h3>DNS</h3><p>Two <strong>unproxied</strong> Cloudflare <code>A</code> records, one per hostname; Traefik obtains TLS from Let's Encrypt over TLS-ALPN-01. Proxying would break both UDP STUN and the challenge.</p></div>
+    <div class="card"><h3>Server</h3><p>Docker Compose: Traefik, the combined <code>netbird-server</code>, the dashboard, and Authentik with its Postgres and Redis — every image pinned by its own key in <code>colors.yml</code>.</p></div>
+    <div class="card"><h3>Acceptance</h3><p>Convergence enrols two throwaway peers on isolated networks and proves traffic flows over the relay; the workflow then validates both certificates through the system trust store and asserts the internal ports refuse connections.</p></div>
+  </div>
+
+  <h2>The machine keypair</h2>
+  <p>The deployment owns its SSH key, following the workspace SSH Keypair Standard. Leave <code>vultr-ssh-keys</code> out of <code>colors.yml</code> and the first real <code>create</code> generates <code>~/.ssh/&lt;profile&gt;</code>, registers it at Vultr under the profile name, and a successful <code>delete</code> removes it last — never before.</p>
+
+  <div class="callout warning"><strong>The key lives outside the checkout.</strong> Cloning a deployment repository does not carry machine access with it; copy <code>~/.ssh/&lt;profile&gt;</code> deliberately. A key with no state is never overwritten, and a Vultr key named after the profile that this deployment's state does not own stops the run — if its fingerprint is not yours, do not delete it.</div>
+
+  <p>Supplying <code>vultr-ssh-keys</code> opts out entirely: the package then generates, validates and deletes no key material. Rotation is a rebuild, because Vultr key lists are ForceNew.</p>
+
+  <h2>The SSH config block</h2>
+  <p>Convergence also writes one <code>~/.ssh/config</code> block, following the workspace SSH Config Standard, so <code>ssh &lt;profile&gt;</code> reaches the host with no address, user or <code>-i</code> flag. The block names an <code>IdentityFile</code> only in keygen mode, where the package knows the key because it generated it. It is inserted above the first <code>Host</code> line, because <code>ssh_config</code> takes the first value it obtains and a <code>Host *</code> stanza higher in the file would otherwise win on <code>User</code> and <code>IdentityFile</code>.</p>
+  <p>Delete removes the block before destroying the instance, the reverse of the keypair: a block that outlives its host is stale but harmless, while a key removed early locks you out of a machine that still exists.</p>
+
+  <h2>Exposure</h2>
+  <table>
+    <tr><th>Port</th><th>Exposure</th><th>Purpose</th></tr>
+    <tr><td>22</td><td><code>vultr-ssh-sources</code></td><td>Key-only SSH for convergence and recovery</td></tr>
+    <tr><td>80 / 443</td><td><code>vultr-http-sources</code></td><td>Traefik: dashboard, REST API, management and signal gRPC, relay WebSocket, embedded IdP, and Authentik on its own hostname</td></tr>
+    <tr><td>3478 / udp</td><td><code>vultr-stun-sources</code></td><td>STUN, bundled into <code>netbird-server</code>. The only UDP published — there is no coturn and no legacy relay port range.</td></tr>
+    <tr><td>9000 / 9090</td><td>loopback</td><td>NetBird healthcheck and metrics</td></tr>
+    <tr><td>5432 / 6379</td><td>loopback</td><td>Authentik's Postgres and Redis</td></tr>
+  </table>
+
+  <h2>Safety</h2>
+  <ul>
+    <li>Credentials are <code>COLORS_PAR_*</code> variables in the gitignored <code>.envrc.private</code> — never in <code>colors.yml</code>.</li>
+    <li>Never export <code>COLORS_PAR_PROFILE</code>; the profile keys remote state.</li>
+    <li><code>.colors/</code> is generated output: never edit or commit it.</li>
+    <li><code>compute-prevent-destroy: true</code> guards deletion behind a one-run override.</li>
+  </ul>
+
+  <p><a href="https://github.com/getcolors/netbird">Source on GitHub</a> · <a href="skills/package-netbird-green/references/configuration.md">Configuration reference</a> · <a href="https://www.getcolors.ai/getcolors/netbird">In the Package Skills Catalog</a> · <a href="https://www.getcolors.ai/featured#netbird">Featured on getcolors.ai</a></p>
+</main></body>
+</html>

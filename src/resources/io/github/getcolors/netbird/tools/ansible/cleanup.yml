@@ -1,0 +1,23 @@
+---
+- name: Stop NetBird services before infrastructure deletion
+  hosts: netbird
+  become: true
+  gather_facts: false
+  tasks:
+    # A last archive before the host goes away. It is what makes a delete
+    # reversible, so it is attempted but never allowed to block the teardown.
+    - name: Take a final backup
+      ansible.builtin.command: /usr/local/sbin/netbird-backup
+      failed_when: false
+      changed_when: false
+
+    - ansible.builtin.systemd_service:
+        name: netbird-backup.timer
+        state: stopped
+        enabled: false
+      failed_when: false
+    - ansible.builtin.command: docker compose down
+      args: {chdir: /opt/netbird}
+      register: compose_down
+      changed_when: "'Removed' in (compose_down.stderr + compose_down.stdout)"
+      failed_when: false
