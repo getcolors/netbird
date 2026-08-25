@@ -82,8 +82,15 @@ key=$(jq -r '.key' <<<"$key_json")
 # So each peer drops UDP to the stack subnet, with one exception for STUN. The
 # control plane is TCP 443 to Traefik and is untouched; WireGuard is UDP and
 # has nowhere direct to go, so the only path left is the relay.
+# Ask the running stack what its network is called rather than reproducing
+# Compose's project-name rule, which derives from the directory and is not the
+# profile.
+NET=$(docker inspect netbird-traefik \
+  --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+[[ -n $NET ]] || { log "FAIL: cannot determine the stack network"; exit 1; }
+
 for p in a b; do
-  docker run -d --name "$RUN-$p" --network <{ profile }>_netbird \
+  docker run -d --name "$RUN-$p" --network "$NET" \
     --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add SYS_RESOURCE \
     --add-host "<{ netbird-host }>:<{ traefik-ip }>" \
     -e NB_SETUP_KEY="$key" \
