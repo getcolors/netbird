@@ -247,57 +247,45 @@
 
     # A healthy Authentik container is not an applied blueprint: the worker
     # applies them asynchronously, and a failed one leaves the stack green with
-    # no OAuth2 provider. Ask for the object.
-    # Authentik must be publicly reachable before its API can be asked
-    # anything, and that also proves Traefik issued its certificate.
-    - name: Wait for Authentik to answer over HTTPS
-      ansible.builtin.uri:
-        url: "https://authentik.example.com/-/health/ready/"
-        status_code: [200, 204]
-      register: ak_ready
-      retries: 60
-      delay: 10
-      until: ak_ready is succeeded
-
-    # A healthy Authentik container is not an applied blueprint: the worker
-    # applies them asynchronously, and a failed one leaves the stack green with
-    # no OAuth2 provider at all. Ask for the object.
+    # no OAuth2 provider at all. So ask for the objects — and for the blueprint
+    # instance's own status, which is what distinguishes "applied" from
+    # "partially applied".
     #
-    # Asked from the host over the public URL, not from inside the container:
-    # the Authentik image carries no HTTP client, so an in-container probe
-    # fails closed on a working deployment. That mistake was made once here
-    # already, against a blueprint that had in fact applied cleanly.
+    # Asked through `ak`, the container's own CLI, rather than over HTTP. The
+    # image carries no HTTP client, and every API credential here is
+    # deliberately short-lived: the bootstrap token is revoked once Authentik
+    # is initialised, so an API-based check passes on the first converge and
+    # then 403s on every one after it. Both mistakes were made here in turn.
     - name: Prove the Authentik blueprint applied
       ansible.builtin.shell: |
         set -euo pipefail
-        curl -fsS -H "Authorization: Bearer $(cat /etc/netbird/secrets/authentik_bootstrap_token)" \
-          "https://authentik.example.com/api/v3/providers/oauth2/" \
-          | jq -e --arg c "netbird" \
-            '[.results[] | select(.client_id==$c)] | length == 1' >/dev/null
+        docker compose -f /opt/netbird/compose.yml exec -T authentik-server ak shell -c "
+        from authentik.blueprints.models import BlueprintInstance
+        from authentik.providers.oauth2.models import OAuth2Provider
+        from authentik.core.models import Application
+        from authentik.brands.models import Brand
+        checks = {
+            'instance': BlueprintInstance.objects.filter(
+                name='netbird-oidc', status='successful').count() == 1,
+            'provider': OAuth2Provider.objects.filter(
+                client_id='netbird').count() == 1,
+            'application': Application.objects.filter(slug='netbird').count() == 1,
+            # The device-code grant needs a flow *assigned as the brand
+            # default*, not merely declared. Without it CLI enrolment fails
+            # while the dashboard keeps working.
+            'device_code_flow': Brand.objects.filter(
+                domain='authentik.example.com',
+                flow_device_code__isnull=False).count() == 1,
+        }
+        print('BLUEPRINT_RESULT ' + repr(checks))
+        print('BLUEPRINT_OK' if all(checks.values()) else 'BLUEPRINT_INCOMPLETE')
+        " 2>/dev/null | grep -q BLUEPRINT_OK
       args: {executable: /bin/bash}
       register: bp_applied
       changed_when: false
       retries: 30
       delay: 10
       until: bp_applied.rc == 0
-
-    # The device-code grant needs a flow *assigned as the brand default*, not
-    # merely declared. Without it CLI enrolment fails while the dashboard keeps
-    # working, which is exactly the kind of half-configured state a green stack
-    # hides.
-    - name: Prove the device-code flow is the brand default
-      ansible.builtin.shell: |
-        set -euo pipefail
-        curl -fsS -H "Authorization: Bearer $(cat /etc/netbird/secrets/authentik_bootstrap_token)" \
-          "https://authentik.example.com/api/v3/core/brands/" \
-          | jq -e --arg d "authentik.example.com" \
-            '[.results[] | select(.domain==$d and .flow_device_code != null)] | length == 1' >/dev/null
-      args: {executable: /bin/bash}
-      register: brand_flow
-      changed_when: false
-      retries: 20
-      delay: 10
-      until: brand_flow.rc == 0
 
     # Discovery must advertise the device-authorization endpoint, because
     # `netbird up` on a CLI client uses the device-code grant and a working
