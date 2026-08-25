@@ -110,3 +110,20 @@
   (let [compose (slurp (io/resource "io/github/getcolors/netbird/tools/ansible/compose.yml"))]
     (is (str/includes? compose "extra_hosts"))
     (is (str/includes? compose "<{ netbird-authentik-host }>:<{ traefik-ip }>"))))
+
+(deftest the-dashboard-carries-the-variable-its-startup-script-demands
+  ;; `init_react_envs` exits 1 without USE_AUTH0 and supervisord carries on, so
+  ;; nginx serves every $NETBIRD_* placeholder verbatim while `/` still returns
+  ;; 200. This shipped once.
+  (let [env (slurp (io/resource "io/github/getcolors/netbird/tools/ansible/dashboard.env"))]
+    (is (str/includes? env "USE_AUTH0=false"))
+    ;; Upstream gates this behind its agent-network preset, where the dashboard
+    ;; hides the standard surfaces.
+    (is (not (str/includes? env "NETBIRD_AGENT_NETWORK_ONLY=true")))))
+
+(deftest authentik-accepts-the-federation-callback
+  ;; The dashboard authenticates against the embedded Dex, which federates to
+  ;; Authentik: the redirect Authentik receives is Dex's callback, not the
+  ;; dashboard's.
+  (let [bp (slurp (io/resource "io/github/getcolors/netbird/tools/ansible/blueprint.yaml"))]
+    (is (str/includes? bp "/oauth2/callback"))))

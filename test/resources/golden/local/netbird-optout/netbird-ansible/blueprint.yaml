@@ -64,6 +64,14 @@ entries:
         - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
         - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
       redirect_uris:
+        # The one that actually matters. The dashboard authenticates against
+        # NetBird's embedded Dex, and Dex federates to Authentik as an upstream
+        # connector — so the redirect Authentik receives is Dex's callback, not
+        # the dashboard's. Registering only the dashboard URIs makes Authentik
+        # reject the request before it records an event, which looks from the
+        # outside like the login never reached Authentik at all.
+        - matching_mode: strict
+          url: "https://netbird.example.com/oauth2/callback"
         - matching_mode: strict
           url: "https://netbird.example.com/nb-auth"
         - matching_mode: strict

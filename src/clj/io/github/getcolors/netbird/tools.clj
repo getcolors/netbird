@@ -255,6 +255,21 @@
 
         :else
         (let [cert-errs (keep cert-error [host ak])
+              ;; The dashboard substitutes its configuration into the built
+              ;; assets at container start, and the script that does it exits
+              ;; non-zero on a missing variable while supervisord carries on.
+              ;; nginx then serves the placeholders verbatim and every request
+              ;; for `/` still returns 200 — so the page has to be read, not
+              ;; merely fetched. This shipped once already.
+              page (out ["curl" "-fsS" (str "https://" host "/")])
+              chunks (->> (re-seq #"/_next/static/chunks/[A-Za-z0-9_.\-]+\.js" page)
+                          distinct (take 6))
+              unsubstituted (some (fn [u]
+                                    (when (str/includes?
+                                           (out ["curl" "-fsS" (str "https://" host u)])
+                                           "$NETBIRD_")
+                                      u))
+                                  chunks)
               disco (out ["curl" "-fsS" (str "https://" ak
                                              "/application/o/netbird/.well-known/openid-configuration")])
               ;; Ports that must not be open from outside. Postgres, Redis and
@@ -265,6 +280,12 @@
           (cond
             (seq cert-errs)
             (assoc opts :green/exit 1 :green/err (str/join "; " cert-errs))
+
+            unsubstituted
+            (assoc opts :green/exit 1
+                   :green/err (str "the dashboard is serving unsubstituted configuration in "
+                                   unsubstituted "; init_react_envs failed at container start "
+                                   "(a missing variable makes it exit 1 while nginx keeps serving)"))
 
             (not (str/includes? disco "device_authorization_endpoint"))
             (assoc opts :green/exit 1
@@ -278,7 +299,7 @@
 
             :else
             (assoc opts :green/exit 0
-                   :netbird/acceptance {:dashboard "ok"
+                   :netbird/acceptance {:dashboard "configured"
                                         :certificates "trusted"
                                         :oidc "complete"
                                         :closed-ports "confirmed"})))))))
