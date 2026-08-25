@@ -248,12 +248,30 @@
     # A healthy Authentik container is not an applied blueprint: the worker
     # applies them asynchronously, and a failed one leaves the stack green with
     # no OAuth2 provider. Ask for the object.
+    # Authentik must be publicly reachable before its API can be asked
+    # anything, and that also proves Traefik issued its certificate.
+    - name: Wait for Authentik to answer over HTTPS
+      ansible.builtin.uri:
+        url: "https://authentik.example.com/-/health/ready/"
+        status_code: [200, 204]
+      register: ak_ready
+      retries: 60
+      delay: 10
+      until: ak_ready is succeeded
+
+    # A healthy Authentik container is not an applied blueprint: the worker
+    # applies them asynchronously, and a failed one leaves the stack green with
+    # no OAuth2 provider at all. Ask for the object.
+    #
+    # Asked from the host over the public URL, not from inside the container:
+    # the Authentik image carries no HTTP client, so an in-container probe
+    # fails closed on a working deployment. That mistake was made once here
+    # already, against a blueprint that had in fact applied cleanly.
     - name: Prove the Authentik blueprint applied
       ansible.builtin.shell: |
         set -euo pipefail
-        docker compose -f /opt/netbird/compose.yml exec -T authentik-server \
-          curl -fsS -H "Authorization: Bearer $(cat /etc/netbird/secrets/authentik_bootstrap_token)" \
-          http://127.0.0.1:9000/api/v3/providers/oauth2/ \
+        curl -fsS -H "Authorization: Bearer $(cat /etc/netbird/secrets/authentik_bootstrap_token)" \
+          "https://authentik.example.com/api/v3/providers/oauth2/" \
           | jq -e --arg c "netbird" \
             '[.results[] | select(.client_id==$c)] | length == 1' >/dev/null
       args: {executable: /bin/bash}
@@ -262,6 +280,24 @@
       retries: 30
       delay: 10
       until: bp_applied.rc == 0
+
+    # The device-code grant needs a flow *assigned as the brand default*, not
+    # merely declared. Without it CLI enrolment fails while the dashboard keeps
+    # working, which is exactly the kind of half-configured state a green stack
+    # hides.
+    - name: Prove the device-code flow is the brand default
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsS -H "Authorization: Bearer $(cat /etc/netbird/secrets/authentik_bootstrap_token)" \
+          "https://authentik.example.com/api/v3/core/brands/" \
+          | jq -e --arg d "authentik.example.com" \
+            '[.results[] | select(.domain==$d and .flow_device_code != null)] | length == 1' >/dev/null
+      args: {executable: /bin/bash}
+      register: brand_flow
+      changed_when: false
+      retries: 20
+      delay: 10
+      until: brand_flow.rc == 0
 
     # Discovery must advertise the device-authorization endpoint, because
     # `netbird up` on a CLI client uses the device-code grant and a working
