@@ -108,6 +108,7 @@
         - {src: config.yaml, dest: /etc/netbird/config.yaml.tmpl, mode: "0600"}
         - {src: blueprint.yaml, dest: /etc/netbird/blueprint.yaml.tmpl, mode: "0600"}
         - {src: bootstrap.sh, dest: /usr/local/sbin/netbird-bootstrap, mode: "0755"}
+        - {src: federated-login.py, dest: /usr/local/sbin/netbird-federated-login, mode: "0755"}
         - {src: smoke.sh, dest: /usr/local/sbin/netbird-smoke, mode: "0755"}
         - {src: s3.py, dest: /usr/local/sbin/netbird-s3, mode: "0755"}
         - {src: backup.sh, dest: /usr/local/sbin/netbird-backup, mode: "0755"}
@@ -313,7 +314,7 @@
     - name: Bootstrap the control plane
       ansible.builtin.command: /usr/local/sbin/netbird-bootstrap
       register: bootstrap
-      changed_when: "'created' in bootstrap.stderr or 'registered' in bootstrap.stderr or 'promoting' in bootstrap.stderr"
+      changed_when: "'created' in bootstrap.stderr or 'registered' in bootstrap.stderr or 'rotated' in bootstrap.stderr"
 
     - name: Record that Authentik has been bootstrapped
       ansible.builtin.file: {path: /etc/netbird/state/authentik-bootstrapped, state: touch, mode: "0600"}
@@ -346,16 +347,6 @@
       retries: 2
       delay: 20
       until: smoke.rc == 0
-
-    - name: Report a pending ownership transfer
-      ansible.builtin.debug:
-        msg: >-
-          MANUAL STEP PENDING — <{ netbird-owner-email }> has not signed in
-          through Authentik yet, so the break-glass administrator is still the
-          owner. Sign in once at https://<{ netbird-host }>/ using the Authentik
-          option, then run `./green create` again; the transfer completes by
-          itself.
-      when: bootstrap.stderr is search('PENDING')
 
   handlers:
     - name: Converge containers

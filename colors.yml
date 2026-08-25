@@ -45,21 +45,19 @@ netbird-authentik-host: authentik.example.com
 
 netbird-letsencrypt-email: admin@example.com
 
-# The account that ends up owning this NetBird installation. It must sign in
-# through Authentik once before ownership can transfer to it; until then the
-# bootstrap administrator below stays owner and `./green create` says so.
-netbird-owner-email: admin@example.com
-
-# The break-glass administrator, created through the embedded IdP during
-# bootstrap and deliberately kept afterwards. It is the way back in when
-# Authentik is unavailable, which is exactly when an Authentik-only account is
-# no use. Its password is COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD.
+# The owner of the *local* account, created through the embedded IdP. It exists
+# because registering an identity provider needs an authenticated caller and
+# only POST /api/setup can produce the first one. It is not a way into the
+# federated network: a user arriving through Authentik gets their own account
+# and the two never merge. Password: COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD.
 netbird-bootstrap-email: breakglass@example.com
 netbird-bootstrap-name: Break Glass
 
-# Authentik's own first administrator (akadmin). Its password and API token are
-# supplied only while Authentik has never been initialised, then removed from
-# the running stack and the token revoked.
+# Authentik's first administrator (akadmin), and therefore the owner of the
+# account this deployment actually runs: convergence signs in as it once, which
+# is what brings that account into existence. Its password and API token reach
+# the stack only while Authentik has never been initialised, after which they
+# are removed from the running configuration and the token is revoked.
 netbird-authentik-bootstrap-email: admin@example.com
 
 # The OAuth2 client id declared in the Authentik blueprint and handed to

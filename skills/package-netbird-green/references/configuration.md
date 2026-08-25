@@ -26,10 +26,9 @@ point one deployment at another's. The package refuses to run when it is set.
 | `netbird-host` | Public hostname for the control plane: dashboard, REST API, management and signal gRPC, relay WebSocket and the embedded Dex IdP, all multiplexed behind Traefik on 443. |
 | `netbird-authentik-host` | Public hostname for Authentik. Must differ from `netbird-host` and share its registrable domain — one zone lookup serves both records. |
 | `netbird-letsencrypt-email` | Contact address for ACME. |
-| `netbird-owner-email` | The Authentik account that ends up owning this installation. Must sign in once through Authentik before ownership transfers; until then the break-glass account stays owner and every converge says so. |
-| `netbird-bootstrap-email` | The break-glass administrator, created through the embedded IdP. Must differ from `netbird-owner-email` — one address for both would make recovery depend on the provider it exists to survive. |
+| `netbird-bootstrap-email` | Owner of the *local* account, created through the embedded IdP so that an authenticated caller exists to register the identity provider. Not a way into the federated network. Must differ from `netbird-authentik-bootstrap-email`. |
 | `netbird-bootstrap-name` | Display name for that account. |
-| `netbird-authentik-bootstrap-email` | Authentik's own first administrator (`akadmin`). |
+| `netbird-authentik-bootstrap-email` | Authentik's first administrator (`akadmin`), and the owner of the account this deployment runs — convergence signs in as it once, which is what creates that account. There is no separate owner key: a second key whose only correct value is this address would be a transcription step. |
 | `netbird-oidc-client-id` | OAuth2 client id, declared in the Authentik blueprint and handed to NetBird's identity-providers API. Deterministic; the secret beside it is generated per host. |
 | `netbird-stun-port` | UDP port for STUN, bundled into `netbird-server`. Conventionally `3478`. The only UDP published. |
 | `netbird-log-level` | `error`, `warn`, `info` or `debug`. |

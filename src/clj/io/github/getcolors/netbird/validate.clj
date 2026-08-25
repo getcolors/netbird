@@ -19,7 +19,7 @@
   [:profile :workdir :provider-compute :provider-dns :provider-backend
    :compute-prevent-destroy
    :netbird-host :netbird-authentik-host :netbird-letsencrypt-email
-   :netbird-owner-email :netbird-bootstrap-email :netbird-bootstrap-name
+   :netbird-bootstrap-email :netbird-bootstrap-name
    :netbird-authentik-bootstrap-email
    :netbird-oidc-client-id :netbird-stun-port :netbird-log-level
    :netbird-docker-subnet
@@ -126,17 +126,19 @@
       [":netbird-authentik-host must share a zone with :netbird-host"])
     (when (= (str (:netbird-host opts)) (str (:netbird-authentik-host opts)))
       [":netbird-authentik-host must differ from :netbird-host"])
-    (for [k [:netbird-letsencrypt-email :netbird-owner-email
+    (for [k [:netbird-letsencrypt-email
              :netbird-bootstrap-email :netbird-authentik-bootstrap-email]
           :let [v (get opts k)]
           :when (and (not (missing? v)) (not (re-matches email-re (str v))))]
       (str k " must be an email address"))
-    ;; The break-glass administrator and the Authentik owner must be different
-    ;; accounts. One address for both would make the recovery path depend on
-    ;; the identity provider it exists to survive.
-    (when (and (not (missing? (:netbird-owner-email opts)))
-               (= (str (:netbird-owner-email opts)) (str (:netbird-bootstrap-email opts))))
-      [":netbird-owner-email must differ from :netbird-bootstrap-email"])
+    ;; The two identities live in different NetBird accounts — the local one
+    ;; created by /api/setup, the federated one created by its first Authentik
+    ;; login — and there is no merge between them. One address for both would
+    ;; read as a single identity that can reach both, which nothing provides.
+    (when (and (not (missing? (:netbird-authentik-bootstrap-email opts)))
+               (= (str (:netbird-authentik-bootstrap-email opts))
+                  (str (:netbird-bootstrap-email opts))))
+      [":netbird-authentik-bootstrap-email must differ from :netbird-bootstrap-email"])
     (for [k image-keys
           :let [v (get opts k)]
           :when (and (not (missing? v)) (not (re-matches image-re (str v))))]

@@ -127,3 +127,9 @@
   ;; dashboard's.
   (let [bp (slurp (io/resource "io/github/getcolors/netbird/tools/ansible/blueprint.yaml"))]
     (is (str/includes? bp "/oauth2/callback"))))
+
+(deftest the-federated-login-is-shipped
+  ;; The account that matters is created by its first federated login, and
+  ;; nothing in the NetBird API will create it on that user's behalf.
+  (let [targets (map #(str (:target %)) (tools/ansible-specs (fixture)))]
+    (is (some #(str/ends-with? % "federated-login.py") targets))))

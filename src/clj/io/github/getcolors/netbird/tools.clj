@@ -163,6 +163,7 @@
      (spec (template "ansible" "dashboard.env") (str dir "/dashboard.env") data)
      (spec (template "ansible" "blueprint.yaml") (str dir "/blueprint.yaml") data)
      (spec (template "ansible" "bootstrap.sh") (str dir "/bootstrap.sh") data)
+     (spec (template "ansible" "federated-login.py") (str dir "/federated-login.py") data)
      (spec (template "ansible" "smoke.sh") (str dir "/smoke.sh") data)
      (spec (template "ansible" "s3.py") (str dir "/s3.py") data)
      (spec (template "ansible" "backup.sh") (str dir "/backup.sh") data)

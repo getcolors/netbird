@@ -45,22 +45,22 @@ Credentials are `COLORS_PAR_*` environment variables in a gitignored
 `.envrc.private` — never in `colors.yml`. Seven are required; everything else
 the deployment needs is generated on the host and supplied by nobody.
 
-## First sign-in
+## Signing in
 
-Convergence creates a **break-glass administrator** through NetBird's embedded
-IdP and reports one manual step:
+Convergence creates the account for you: it signs in through Authentik once, on
+your behalf, driving the real OAuth2 flow rather than asking you to open a
+browser. There is no manual step and nothing to approve.
 
-1. Open `https://<netbird-host>/` and sign in with the **Authentik** option as
-   `netbird-owner-email`.
-2. Run `./green create` again.
+Sign in at `https://<netbird-host>/` with the **Authentik** option, as
+`netbird-authentik-bootstrap-email` — that account owns the deployment.
 
-The second converge approves that user, promotes it to owner and asserts the
-role. Until then the break-glass account stays owner and every run says so.
-This is the one step that cannot be automated: NetBird only imports an external
-user after it has authenticated once, and that login needs a browser.
-
-The break-glass account is deliberately kept afterwards, as an administrator.
-It is the way back in when Authentik is unavailable.
+**Two accounts exist, and only one is the network.** `POST /api/setup` creates a
+local owner in a local account, because registering an identity provider needs
+an authenticated caller and that is the only way to get the first one. A user
+arriving through Authentik gets a *separate* account and the two never merge.
+The local owner is therefore **not** a way back into the federated network: if
+Authentik is unavailable, recover by restoring from backup or by registering a
+new identity provider with the local credential.
 
 ## Operating
 

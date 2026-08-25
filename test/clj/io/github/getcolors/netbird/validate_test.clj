@@ -82,11 +82,19 @@
   (is (some #(str/includes? % "must differ")
             (validate/state-errors (fixture :netbird-authentik-host "netbird.example.com")))))
 
-(deftest the-break-glass-account-must-not-be-the-owner
-  ;; One address for both would make the recovery path depend on the identity
-  ;; provider it exists to survive.
-  (is (some #(str/includes? % "netbird-owner-email")
+(deftest the-two-identities-must-be-distinct
+  ;; They live in different NetBird accounts — the local one created by
+  ;; /api/setup, the federated one created by its first Authentik login — and
+  ;; nothing merges them. One address for both would read as a single identity
+  ;; that reaches both, which does not exist.
+  (is (some #(str/includes? % "netbird-authentik-bootstrap-email")
             (validate/state-errors (fixture :netbird-bootstrap-email "admin@example.com")))))
+
+(deftest there-is-no-owner-email-key
+  ;; The owner of the account this deployment runs *is* the Authentik admin;
+  ;; a second key whose only correct value is that address is a transcription
+  ;; step, and transcription drifts.
+  (is (not (contains? (set validate/required) :netbird-owner-email))))
 
 (deftest accepts-a-digest-pin
   (is (= [] (validate/state-errors

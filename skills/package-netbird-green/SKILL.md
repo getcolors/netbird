@@ -31,13 +31,17 @@ launcher walks up from the working directory to find `colors.yml`.
   the host. It decrypts every backup and is deliberately not generated on the
   server.
 
-## After the first converge
+## Accounts
 
-Convergence reports one pending manual step. Sign in once at
-`https://<netbird-host>/` with the Authentik option as `netbird-owner-email`,
-then run `./green create` again — the second run approves that user, promotes
-it to owner and asserts the role. NetBird only imports an external user after
-it has authenticated once, so this cannot be automated away.
+Convergence creates the account itself, by signing in through Authentik once on
+your behalf. There is no manual step.
+
+Two accounts exist. `POST /api/setup` makes a local owner in a local account,
+because registering an identity provider needs an authenticated caller. A user
+arriving through Authentik gets a separate account, and the two never merge —
+so the local owner is **not** a way into the federated network. If Authentik is
+lost, restore from backup or register a new identity provider with the local
+credential.
 
 ## Operating
 

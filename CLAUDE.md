@@ -46,34 +46,47 @@ firewall opens exactly one UDP port and no 49152–65535 relay range. Relayed
 traffic rides the WebSocket on 443. If you find yourself adding a TURN shared
 secret, you are implementing the legacy topology.
 
-## Why the bootstrap is a state machine
+## Why the bootstrap is a state machine, and why there are two accounts
 
 An external IdP cannot be configured at first boot: NetBird needs an
 authenticated caller to accept one, and the only headless way to get the first
-owner is `POST /api/setup`, which works exactly once and requires
+is `POST /api/setup`, which works exactly once and requires
 `NB_SETUP_PAT_ENABLED=true`. So `bootstrap.sh` is a sequence of steps each
 guarded by observed state, which is what lets a one-way initialisation live
 inside desired state and be run twice with no effect.
 
-Two parts of it are load-bearing:
+**A federated user does not join the local account.** This is the fact the whole
+design turns on, and it was learned the hard way. `POST /api/setup` creates a
+local owner in a local account. When a user then signs in through Authentik,
+NetBird gives them *their own* account, where they are already owner with
+nothing pending — and there is no merge. `POST /api/users` creates a *local*
+user in the local account (it returns a generated password), and
+`netbird-server admin` only manages embedded-IdP identities. So there is no
+promotion to perform and no approval to grant.
+
+The consequence is not softened anywhere in this package: **the local owner is
+not a way back into the federated network.** It owns a different, empty
+account. If Authentik is lost, recovery is a restore from backup, or
+re-registering an identity provider using the local credential — not a local
+login into the federated account, which does not exist. Documentation that promises otherwise is wrong.
+
+Two parts of the sequence are load-bearing:
 
 - **The setup PAT is exchanged immediately.** It is short-lived and cannot be
   reissued once setup is complete, so a converge after its expiry would have no
-  credential at all. The first act after bootstrap is to create a durable,
-  rotatable token, persist it `0600`, and destroy the setup PAT. It is never
-  written to disk and never reaches a backup.
-- **Ownership transfer waits for a human, and completes by itself.** Configuring
-  the IdP does not create the Authentik user; NetBird imports it the first time
-  it authenticates, and that login lands in "pending approval". So the step is
-  written as a condition: if the user is absent, the play reports a pending
-  manual step and exits zero; the next converge approves it, promotes it and
-  asserts the role. Promotion *transfers* ownership rather than adding a second
-  owner, which is why the break-glass account is expected to end up an
-  administrator.
+  credential at all. It is never written to disk and never reaches a backup.
+- **The federated account is created by a login this package performs.** Nothing
+  in the API creates it, so `netbird-federated-login` drives the real OAuth2
+  flow through Authentik's flow-executor API instead of a browser: dashboard →
+  Dex → Authentik, two PKCE legs, the explicit-consent flow driven like any
+  other stage. The token it returns mints the durable credential every later
+  converge, backup and acceptance run uses. Because this is automated, there is
+  no manual step in a first converge.
 
-The break-glass account is deliberately kept. It authenticates against the
-embedded Dex IdP, which is the only way back in when Authentik is down —
-exactly when an Authentik-only account is no use.
+The upstream article's flow — sign in, land in "User approval pending", get
+approved, get promoted to owner, delete the local account — describes a
+deployment where the external user joins the existing account. That is not what
+this version does.
 
 ## Why Authentik is exposed through Traefik
 

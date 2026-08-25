@@ -24,9 +24,19 @@ else
   echo "no backup has completed yet"
 fi
 
-echo; echo "== ownership"
-if [[ -f /etc/netbird/state/owner-transfer ]]; then
-  echo "PENDING: admin@example.com has not signed in through Authentik yet"
-else
-  echo "transferred"
-fi
+echo; echo "== accounts"
+# Two, and deliberately so. The federated account is the deployment; the local
+# one exists because registering an identity provider needs an authenticated
+# caller and only /api/setup can produce the first. The local owner is not a
+# way back into the federated network — see CLAUDE.md.
+for pair in "federated:/etc/netbird/secrets/pat" "local:/etc/netbird/secrets/local_pat"; do
+  name=${pair%%:*}; file=${pair#*:}
+  if [[ -s $file ]]; then
+    who=$(curl -fsS -H "Authorization: Token $(cat "$file")" \
+          https://netbird.example.com/api/users 2>/dev/null \
+          | jq -r ".[] | select(.is_current==true) | \"\(.email) (\(.role))\"" | head -1)
+    echo "  $name: ${who:-unreachable}"
+  else
+    echo "  $name: no credential"
+  fi
+done
