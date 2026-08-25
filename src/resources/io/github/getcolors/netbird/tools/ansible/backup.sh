@@ -72,38 +72,35 @@ tar -C "$work" -czf - . \
 [[ -s $archive ]] || { log "FATAL: the archive is empty"; exit 1; }
 
 set -a; . /etc/netbird/secrets/backup.env; set +a
-export RCLONE_CONFIG_R2_TYPE=s3
-export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-# A bucket-scoped R2 token cannot answer rclone's default "does this bucket
-# exist, shall I create it" probe, and rclone reports that denial as a 403 on
-# the upload itself — indistinguishable from a credential that cannot write.
-# The object operations are permitted; only the pre-flight is not.
-export RCLONE_S3_NO_CHECK_BUCKET=true
-export RCLONE_CONFIG_R2_ENDPOINT="<{ netbird-backup-r2-endpoint }>"
-export RCLONE_CONFIG_R2_REGION="<{ netbird-backup-r2-region }>"
-export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
-export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+export S3_ENDPOINT="<{ netbird-backup-r2-endpoint }>"
+export S3_REGION="<{ netbird-backup-r2-region }>"
+S3=/usr/local/sbin/netbird-s3
 
 # Upload under an immutable timestamped key, verify it, and only then advance
 # the pointer. Verifying after overwriting a well-known key would mean a
 # truncated upload had already become the newest backup.
 log "uploading $stamp"
-rclone copyto "$archive" "r2:$BUCKET/archives/netbird-$stamp.tar.gz.gpg"
-local_sum=$(sha256sum "$archive" | cut -d' ' -f1)
-remote_size=$(rclone size --json "r2:$BUCKET/archives/netbird-$stamp.tar.gz.gpg" | jq -r '.bytes')
-local_size=$(stat -c%s "$archive")
-[[ "$remote_size" == "$local_size" ]] || { log "FATAL: uploaded $local_size bytes, remote reports $remote_size"; exit 1; }
+"$S3" put "$BUCKET" "archives/netbird-$stamp.tar.gz.gpg" "$archive"
 
-printf '%s\n%s\n' "netbird-$stamp.tar.gz.gpg" "$local_sum" \
-  | rclone rcat "r2:$BUCKET/latest-known-good"
+local_sum=$(sha256sum "$archive" | cut -d' ' -f1)
+local_size=$(stat -c%s "$archive")
+remote_size=$("$S3" size "$BUCKET" "archives/netbird-$stamp.tar.gz.gpg")
+[[ "$remote_size" == "$local_size" ]] || {
+  log "FATAL: uploaded $local_size bytes, remote reports $remote_size"; exit 1; }
+
+printf '%s\n%s\n' "netbird-$stamp.tar.gz.gpg" "$local_sum" > "$work/latest"
+"$S3" put "$BUCKET" "latest-known-good" "$work/latest"
 log "pointer advanced to $stamp"
 
 # Prune only archives the pointer has moved past, and never the newest.
-mapfile -t old < <(rclone lsf "r2:$BUCKET/archives/" | sort | head -n -1)
-for f in "${old[@]}"; do
-  age_days=$(( ( $(date -u +%s) - $(date -u -d "$(sed -E 's/netbird-([0-9]{8})T([0-9]{6})Z.*/\1 \2/;s/([0-9]{4})([0-9]{2})([0-9]{2}) ([0-9]{2})([0-9]{2})([0-9]{2})/\1-\2-\3 \4:\5:\6/' <<<"$f")" +%s 2>/dev/null || date -u +%s) ) / 86400 ))
-  if (( age_days > <{ netbird-backup-retention-days }> )); then
-    rclone deletefile "r2:$BUCKET/archives/$f" && log "pruned $f"
+mapfile -t archives < <("$S3" list "$BUCKET" "archives/" | sort)
+count=${#archives[@]}
+for f in "${archives[@]:0:$(( count > 0 ? count - 1 : 0 ))}"; do
+  ts=$(sed -E 's#.*netbird-([0-9]{8})T([0-9]{6})Z.*#\1 \2#' <<<"$f")
+  when=$(date -u -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s 2>/dev/null || echo "")
+  [[ -n $when ]] || continue
+  if (( ( $(date -u +%s) - when ) / 86400 > <{ netbird-backup-retention-days }> )); then
+    "$S3" delete "$BUCKET" "$f" && log "pruned $f"
   fi
 done
 

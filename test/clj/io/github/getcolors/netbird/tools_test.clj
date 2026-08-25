@@ -53,7 +53,7 @@
   (let [targets (map #(str (:target %)) (tools/ansible-specs (fixture)))]
     (doseq [f ["ansible.cfg" "main.yml" "cleanup.yml" "compose.yml" "config.yaml"
                "dashboard.env" "blueprint.yaml" "bootstrap.sh" "smoke.sh"
-               "backup.sh" "restore.sh" "status.sh" "backup.service"
+               "s3.py" "backup.sh" "restore.sh" "status.sh" "backup.service"
                "backup-failure.service" "backup.timer" "inventory.json"]]
       (is (some #(str/ends-with? % f) targets) f))))
 

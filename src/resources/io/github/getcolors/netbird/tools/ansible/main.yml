@@ -18,7 +18,7 @@
   tasks:
     - name: Install Docker and tooling
       ansible.builtin.apt:
-        name: [docker.io, docker-compose-v2, ca-certificates, curl, jq, openssl, rclone, gnupg, gzip, dnsutils]
+        name: [docker.io, docker-compose-v2, ca-certificates, curl, jq, openssl, gnupg, gzip, dnsutils]
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -109,6 +109,7 @@
         - {src: blueprint.yaml, dest: /etc/netbird/blueprint.yaml.tmpl, mode: "0600"}
         - {src: bootstrap.sh, dest: /usr/local/sbin/netbird-bootstrap, mode: "0755"}
         - {src: smoke.sh, dest: /usr/local/sbin/netbird-smoke, mode: "0755"}
+        - {src: s3.py, dest: /usr/local/sbin/netbird-s3, mode: "0755"}
         - {src: backup.sh, dest: /usr/local/sbin/netbird-backup, mode: "0755"}
         - {src: restore.sh, dest: /usr/local/sbin/netbird-restore, mode: "0755"}
         - {src: status.sh, dest: /usr/local/sbin/netbird-status, mode: "0755"}

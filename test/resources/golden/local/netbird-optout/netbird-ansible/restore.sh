@@ -22,20 +22,17 @@ case "$mode" in
 esac
 
 set -a; . /etc/netbird/secrets/backup.env; set +a
-export RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare
-# See backup.sh: a bucket-scoped token cannot answer rclone's bucket probe.
-export RCLONE_S3_NO_CHECK_BUCKET=true
-export RCLONE_CONFIG_R2_ENDPOINT="https://example.eu.r2.cloudflarestorage.com"
-export RCLONE_CONFIG_R2_REGION="auto"
-export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
-export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+export S3_ENDPOINT="https://example.eu.r2.cloudflarestorage.com"
+export S3_REGION="auto"
+S3=/usr/local/sbin/netbird-s3
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 if [[ -z $archive ]]; then
-  archive=$(rclone cat "r2:$BUCKET/latest-known-good" | head -1)
+  "$S3" get "$BUCKET" latest-known-good "$work/pointer"
+  archive=$(head -1 "$work/pointer")
   log "latest known good is $archive"
 fi
-rclone copyto "r2:$BUCKET/archives/$archive" "$work/archive.gpg"
+"$S3" get "$BUCKET" "archives/$archive" "$work/archive.gpg"
 
 log "decrypting"
 gpg --batch --yes --quiet --decrypt \

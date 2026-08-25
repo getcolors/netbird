@@ -164,6 +164,7 @@
      (spec (template "ansible" "blueprint.yaml") (str dir "/blueprint.yaml") data)
      (spec (template "ansible" "bootstrap.sh") (str dir "/bootstrap.sh") data)
      (spec (template "ansible" "smoke.sh") (str dir "/smoke.sh") data)
+     (spec (template "ansible" "s3.py") (str dir "/s3.py") data)
      (spec (template "ansible" "backup.sh") (str dir "/backup.sh") data)
      (spec (template "ansible" "restore.sh") (str dir "/restore.sh") data)
      (spec (template "ansible" "status.sh") (str dir "/status.sh") data)
