@@ -18,7 +18,11 @@ services:
     image: traefik:v3.7.11
     container_name: netbird-traefik
     restart: unless-stopped
-    networks: [netbird]
+    networks:
+      netbird:
+        # Fixed, because netbird-server maps the Authentik hostname to it; see
+        # the extra_hosts note below.
+        ipv4_address: 172.30.0.10
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
@@ -92,6 +96,17 @@ services:
       # Enables `POST /api/setup` to mint a one-time PAT, which is the only
       # supported way to bootstrap the first owner without a browser.
       - NB_SETUP_PAT_ENABLED=true
+    # Registering an identity provider makes the server fetch the issuer's
+    # discovery document, and it must use the **public** issuer URL — the
+    # issuer in a token has to be the one a browser saw. Left alone, the
+    # container resolves that name to this host's own public address and the
+    # request dies in hairpin NAT: `identity provider issuer is unreachable`,
+    # HTTP 422, on a stack where every container is healthy and the same URL
+    # answers instantly from the host. Pointing the name at Traefik on the
+    # shared network keeps the URL, the certificate and the issuer string
+    # identical while the packet never leaves the box.
+    extra_hosts:
+      - "authentik.example.com:172.30.0.10"
     volumes:
       - netbird_data:/var/lib/netbird
       - ./config.yaml:/etc/netbird/config.yaml:ro

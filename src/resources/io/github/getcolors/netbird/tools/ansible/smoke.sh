@@ -6,10 +6,12 @@
 # relay are one process here, and any of them can be misconfigured without a
 # container reporting it. So this enrols two throwaway peers and moves traffic.
 #
-# The two peers live on separate Docker networks with no route between them, so
-# a direct WireGuard path is impossible by construction and the only way a
-# packet arrives is through the relay. Without that isolation the test would
-# pass over a LAN path and never touch the relay at all.
+# The two peers share the stack's network — they have to, because a container
+# cannot reach this host's public address — and are then explicitly prevented
+# from taking a direct path: each drops UDP to that subnet except STUN, so
+# WireGuard has nowhere direct to go and the relay is the only route left.
+# Without that, the test would pass over a direct path and never touch the
+# relay it claims to exercise.
 set -euo pipefail
 
 API="https://<{ netbird-host }>/api"
@@ -29,7 +31,6 @@ cleanup() {
   set +e
   for p in a b; do
     docker rm -f "$RUN-$p" >/dev/null 2>&1
-    docker network rm "$RUN-$p" >/dev/null 2>&1
   done
   [[ -n $key_id ]] && api DELETE "/setup-keys/$key_id" >/dev/null 2>&1
   for id in $(api GET /peers 2>/dev/null | jq -r --arg r "$RUN" '.[] | select(.name|startswith($r)) | .id'); do
@@ -71,14 +72,32 @@ key_id=$(jq -r '.id' <<<"$key_json")
 key=$(jq -r '.key' <<<"$key_json")
 [[ -n $key && $key != null ]] || { log "FAIL: no setup key returned"; exit 1; }
 
+# Both peers sit on the stack's own network, because a container cannot reach
+# this host's public address — hairpin NAT drops it — and the management URL
+# has to be the public one. `--add-host` sends that name to Traefik in-network,
+# exactly as netbird-server reaches Authentik.
+#
+# Being on one network would ordinarily let the peers find each other's
+# addresses and connect directly, which would make a "relayed" assertion a lie.
+# So each peer drops UDP to the stack subnet, with one exception for STUN. The
+# control plane is TCP 443 to Traefik and is untouched; WireGuard is UDP and
+# has nowhere direct to go, so the only path left is the relay.
 for p in a b; do
-  docker network create "$RUN-$p" >/dev/null
-  docker run -d --name "$RUN-$p" --network "$RUN-$p" \
+  docker run -d --name "$RUN-$p" --network <{ profile }>_netbird \
     --cap-add NET_ADMIN --cap-add SYS_ADMIN --cap-add SYS_RESOURCE \
+    --add-host "<{ netbird-host }>:<{ traefik-ip }>" \
     -e NB_SETUP_KEY="$key" \
     -e NB_MANAGEMENT_URL="https://<{ netbird-host }>" \
     -e NB_HOSTNAME="$RUN-$p" \
     <{ netbird-client-image }> >/dev/null
+done
+
+log "forcing the relayed path"
+for p in a b; do
+  docker exec "$RUN-$p" sh -c '
+    iptables -A OUTPUT -d <{ netbird-docker-subnet }> -p udp --dport <{ netbird-stun-port }> -j ACCEPT
+    iptables -A OUTPUT -d <{ netbird-docker-subnet }> -p udp -j DROP
+  ' 2>/dev/null || log "warning: could not install the isolation rules in $RUN-$p"
 done
 
 log "waiting for both peers to register"
@@ -104,7 +123,7 @@ done
 # and this test proved something other than what it claims to.
 status=$(docker exec "$RUN-a" netbird status -d 2>/dev/null || true)
 if ! grep -qiE 'relayed|relay' <<<"$status"; then
-  log "FAIL: traffic flowed but not over the relay; the isolation did not hold"
+  log "FAIL: traffic flowed but not over the relay; the isolation rules did not hold"
   echo "$status" >&2
   exit 1
 fi

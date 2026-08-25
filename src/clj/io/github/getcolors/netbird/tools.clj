@@ -150,6 +150,7 @@
   [opts]
   (assoc opts
          :ip (or (:ip opts) "192.0.2.10")
+         :traefik-ip (validate/traefik-ip opts)
          :ssh-keygen (validate/keygen? opts)))
 
 (defn ansible-specs [opts]

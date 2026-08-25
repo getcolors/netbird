@@ -95,3 +95,18 @@
 (deftest acceptance-is-skipped-outside-a-real-create
   (doseq [event [:build :delete]]
     (is (= 0 (:green/exit (tools/acceptance-step (assoc (fixture) :green/event event)))))))
+
+(deftest traefik-has-a-derived-fixed-address
+  ;; netbird-server maps the Authentik hostname to it, so it cannot float. It
+  ;; is derived rather than configured: a value that can only correctly be
+  ;; `<subnet>.10` is a transcription step.
+  (is (= "172.30.0.10" (validate/traefik-ip (fixture))))
+  (is (= "10.9.0.10" (validate/traefik-ip (fixture :netbird-docker-subnet "10.9.0.0/24")))))
+
+(deftest the-server-reaches-authentik-through-traefik
+  ;; A container resolving the public name gets this host's own address and
+  ;; dies in hairpin NAT; the issuer must stay the public URL, so the name is
+  ;; pointed at the proxy instead.
+  (let [compose (slurp (io/resource "io/github/getcolors/netbird/tools/ansible/compose.yml"))]
+    (is (str/includes? compose "extra_hosts"))
+    (is (str/includes? compose "<{ netbird-authentik-host }>:<{ traefik-ip }>"))))

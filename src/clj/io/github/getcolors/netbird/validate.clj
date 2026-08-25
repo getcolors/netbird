@@ -72,6 +72,26 @@
   [opts]
   (once-ssh/keygen? opts))
 
+(defn traefik-ip
+  "A fixed address for Traefik on the compose network, derived from the subnet
+  rather than configured.
+
+  It exists because of hairpin NAT. `netbird-server` must fetch the Authentik
+  issuer's discovery document over its **public** URL — the issuer in a token
+  has to match the one a browser used — but a container resolving that name
+  gets the host's own public address, and the connection times out on the way
+  back in. Mapping the name to Traefik's address on the shared network sends
+  the request straight to the proxy, which still serves the real certificate
+  for it, so TLS and the issuer string both stay honest.
+
+  Derived, not a key: a value that can only correctly be `<subnet>.10` is a
+  transcription step, and transcription drifts."
+  [opts]
+  (let [base (first (str/split (str (:netbird-docker-subnet opts)) #"/"))
+        octets (str/split base #"\.")]
+    (when (= 4 (count octets))
+      (str/join "." (concat (take 3 octets) ["10"])))))
+
 (defn zone
   "The Cloudflare zone both public names belong to."
   [opts]
