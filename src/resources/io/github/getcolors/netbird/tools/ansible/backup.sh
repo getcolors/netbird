@@ -74,6 +74,11 @@ tar -C "$work" -czf - . \
 set -a; . /etc/netbird/secrets/backup.env; set +a
 export RCLONE_CONFIG_R2_TYPE=s3
 export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+# A bucket-scoped R2 token cannot answer rclone's default "does this bucket
+# exist, shall I create it" probe, and rclone reports that denial as a 403 on
+# the upload itself — indistinguishable from a credential that cannot write.
+# The object operations are permitted; only the pre-flight is not.
+export RCLONE_S3_NO_CHECK_BUCKET=true
 export RCLONE_CONFIG_R2_ENDPOINT="<{ netbird-backup-r2-endpoint }>"
 export RCLONE_CONFIG_R2_REGION="<{ netbird-backup-r2-region }>"
 export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"

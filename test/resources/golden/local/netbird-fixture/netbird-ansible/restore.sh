@@ -23,6 +23,8 @@ esac
 
 set -a; . /etc/netbird/secrets/backup.env; set +a
 export RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+# See backup.sh: a bucket-scoped token cannot answer rclone's bucket probe.
+export RCLONE_S3_NO_CHECK_BUCKET=true
 export RCLONE_CONFIG_R2_ENDPOINT="https://example.eu.r2.cloudflarestorage.com"
 export RCLONE_CONFIG_R2_REGION="auto"
 export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
