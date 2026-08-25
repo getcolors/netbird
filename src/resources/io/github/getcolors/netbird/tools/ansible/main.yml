@@ -229,13 +229,21 @@
       register: compose_up
       changed_when: "'Created' in (compose_up.stdout + compose_up.stderr) or 'Recreated' in (compose_up.stdout + compose_up.stderr) or 'Started' in (compose_up.stdout + compose_up.stderr)"
 
-    - name: Wait for the NetBird server healthcheck
-      ansible.builtin.command: docker compose -f /opt/netbird/compose.yml exec -T netbird-server wget -qO- http://127.0.0.1:9000/
+    # Readiness from the outside, because that is the only place it can be
+    # observed: the server image has no HTTP client to probe itself with. This
+    # one request proves Traefik is routing, ACME issued a real certificate,
+    # and the embedded IdP is serving discovery — and it is the same endpoint
+    # upstream's installer waits on.
+    - name: Wait for the NetBird server to serve OIDC discovery
+      ansible.builtin.uri:
+        url: "https://<{ netbird-host }>/oauth2/.well-known/openid-configuration"
+        return_content: true
       register: nb_health
-      changed_when: false
-      retries: 30
+      retries: 60
       delay: 10
-      until: nb_health.rc == 0
+      until:
+        - nb_health is succeeded
+        - nb_health.json.issuer is defined
 
     # A healthy Authentik container is not an applied blueprint: the worker
     # applies them asynchronously, and a failed one leaves the stack green with

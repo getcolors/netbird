@@ -116,11 +116,12 @@ services:
       - traefik.http.services.netbird-server.loadbalancer.server.port=80
       - traefik.http.services.netbird-server-h2c.loadbalancer.server.port=80
       - traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme=h2c
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9000/ >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
+    # No healthcheck, deliberately. The image carries neither wget nor curl, so
+    # every in-container HTTP probe fails closed and `--wait` would hang on a
+    # server that is running perfectly. Upstream's reference compose omits it
+    # for the same reason; readiness is asserted from the host instead, against
+    # the public OIDC discovery document — which is also what upstream's own
+    # installer polls, and proves Traefik, ACME and the embedded IdP at once.
     logging: *logging
 
   # --- Authentik ------------------------------------------------------------
