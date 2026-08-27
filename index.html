@@ -13,9 +13,9 @@
 <script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>
 </head>
 <body><main>
-  <p class="eyebrow">GREEN PACKAGE SKILL · VULTR · NETBIRD · AUTHENTIK</p>
+  <p class="eyebrow">GREEN · RED · BLUE PACKAGE SKILL · VULTR · NETBIRD · AUTHENTIK</p>
   <h1>NetBird Package Skill</h1>
-  <p class="lead">A reproducible Green workflow for a self-hosted NetBird control plane and its identity provider — Traefik, the combined <code>netbird-server</code>, the dashboard and Authentik — behind Cloudflare on a guarded Vultr instance.</p>
+  <p class="lead">A reproducible Green, Red, and Blue workflow for a self-hosted NetBird control plane and its identity provider — Traefik, the combined <code>netbird-server</code>, the dashboard and Authentik — behind Cloudflare on a guarded Vultr instance.</p>
 
   <div class="callout"><strong>One process, four services.</strong> Management, signal, relay and STUN are a single <code>netbird-server</code> multiplexed behind Traefik on 443, so the firewall opens 22, 80, 443 and one UDP port — and nothing else. Authentik gets its own hostname through the same Traefik, rather than the sidecar-and-routing-peer tunnel the upstream guide builds by hand: that needs a setup key which only exists after a human has logged in, and it makes NetBird's auth callbacks depend on a service reachable only through NetBird.</div>
 
@@ -25,6 +25,7 @@ cp .agents/skills/package-netbird-green/green ./green
 chmod +x green
 ./green build
 ./green create --dry-run</code></pre>
+<p>Equivalent Red and Blue skills ship <code>red</code> and <code>blue</code> launchers.</p>
   <p>Build renders reproducible output and dry-run walks the workflow without provider side effects. Real creation and deletion require explicit authorization.</p>
 
   <h2>Architecture</h2>
