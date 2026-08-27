@@ -91,10 +91,13 @@ block before the destroy and the machine keypair after it. Never edit the
 ## Development
 
 ```sh
-bb test                  # unit tests
-bb golden                # render both fixtures and diff against committed output
-bb golden:accept         # regenerate after an intended change — read the diff first
-./scripts/launcher.sh    # launcher behaviour
+cd green && bb test      # unit tests (canonical Clojure implementation)
+cd green && bb golden    # render both fixtures and diff against committed output
+cd green && bb golden:accept  # regenerate after an intended change — read the diff first
+cd red && bun test && bun run typecheck   # TypeScript implementation
+cd blue && uv run pytest                  # Python implementation
+./scripts/parity.sh      # all three colours render byte-identical trees
+./scripts/launcher.sh    # launcher behaviour, from the repository root
 ```
 
 Point the launcher at working trees with `NETBIRD_LIB_ROOT`, `GREEN_LIB_ROOT`

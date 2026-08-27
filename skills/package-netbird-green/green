@@ -11,8 +11,8 @@
 ;; machine keypair and cloud resources, and overriding it from the environment
 ;; can only point netbird at another project's state.
 ;;
-;; This file is both the skill payload and the repository entry point — ./green
-;; in the project root is a symlink to it. It deliberately holds no logic of its
+;; This file is both the skill payload and the repository entry point — green/green
+;; in the repository is a symlink to it. It deliberately holds no logic of its
 ;; own: validation, the graph and the steps all live in the `netbird`
 ;; library, where the test suite reaches them. A copied payload is the one place
 ;; in this project where code cannot be tested, so nothing that can live

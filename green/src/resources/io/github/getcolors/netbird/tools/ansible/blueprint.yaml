@@ -1,0 +1,97 @@
+# Authentik desired state, applied by the worker from /blueprints/custom.
+#
+# Everything the upstream article does by hand across two web UIs is declared
+# here instead. The redirect URIs are the crux: the article has you create the
+# provider, add the IdP in NetBird, copy the redirect URL NetBird prints, and
+# paste it back into Authentik. Those URIs are deterministic — they come from
+# `config.yaml`'s dashboardRedirectURIs and cliRedirectURIs — so they can be
+# declared up front and no value has to travel between two browsers.
+#
+# The client secret is generated once on this host and substituted at install
+# time; it is the same value handed to `POST /api/identity-providers`.
+version: 1
+metadata:
+  name: netbird-oidc
+  labels:
+    blueprints.goauthentik.io/instantiate: "true"
+entries:
+  # The CLI (`netbird up`) authenticates with the device-code grant, which is a
+  # different flow from the browser's authorization code. A working dashboard
+  # login is no evidence at all that this exists, so it is declared and later
+  # asserted.
+  - model: authentik_flows.flow
+    id: device-code-flow
+    identifiers:
+      slug: default-device-code-flow
+    attrs:
+      name: Device code
+      title: Device code
+      designation: stage_configuration
+      authentication: require_authenticated
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: netbird-provider
+    identifiers:
+      name: NetBird
+    attrs:
+      # Confidential, with a secret. The combined server's
+      # `POST /api/identity-providers` takes a client_secret, so this is not the
+      # public-client shape the legacy multi-container guide describes.
+      client_type: confidential
+      client_id: "<{ netbird-oidc-client-id }>"
+      client_secret: "__OIDC_CLIENT_SECRET__"
+      authorization_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-authorization-explicit-consent]]
+      invalidation_flow:
+        !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      signing_key:
+        !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      # Authentik 2026.x gates every flow on this list, and it defaults to
+      # empty — which reads as a provider that exists and permits nothing. The
+      # device endpoint answers `invalid_client` with a correct client id, a
+      # correct secret and the brand flow assigned, so nothing in the error
+      # points at the actual cause. `netbird up` needs the device grant;
+      # the dashboard needs the other two.
+      grant_types:
+        - authorization_code
+        - refresh_token
+        - urn:ietf:params:oauth:grant-type:device_code
+      access_code_validity: minutes=10
+      sub_mode: user_id
+      include_claims_in_id_token: true
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, profile]]
+        - !Find [authentik_providers_oauth2.scopemapping, [scope_name, email]]
+      redirect_uris:
+        # The one that actually matters. The dashboard authenticates against
+        # NetBird's embedded Dex, and Dex federates to Authentik as an upstream
+        # connector — so the redirect Authentik receives is Dex's callback, not
+        # the dashboard's. Registering only the dashboard URIs makes Authentik
+        # reject the request before it records an event, which looks from the
+        # outside like the login never reached Authentik at all.
+        - matching_mode: strict
+          url: "https://<{ netbird-host }>/oauth2/callback"
+        - matching_mode: strict
+          url: "https://<{ netbird-host }>/nb-auth"
+        - matching_mode: strict
+          url: "https://<{ netbird-host }>/nb-silent-auth"
+        - matching_mode: strict
+          url: "http://localhost:53000/"
+
+  - model: authentik_core.application
+    identifiers:
+      slug: netbird
+    attrs:
+      name: NetBird
+      provider: !KeyOf netbird-provider
+      policy_engine_mode: any
+
+  # Without this the device-code grant has no flow to run and CLI enrolment
+  # fails while the dashboard keeps working.
+  - model: authentik_brands.brand
+    identifiers:
+      domain: "<{ netbird-authentik-host }>"
+    attrs:
+      branding_title: NetBird
+      flow_device_code: !KeyOf device-code-flow

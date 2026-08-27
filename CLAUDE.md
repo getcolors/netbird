@@ -2,7 +2,7 @@
 
 ## Repository
 
-`netbird` is a Green-only Package Skill for a self-hosted [NetBird](https://netbird.io)
+`netbird` is a tri-colour Package Skill (green, red, blue) for a self-hosted [NetBird](https://netbird.io)
 control plane with [Authentik](https://goauthentik.io) as its identity
 provider, on one Vultr instance. OpenTofu manages the instance, a firewall
 (22/80/443 TCP and 3478 UDP) and two unproxied Cloudflare `A` records; Ansible
@@ -191,15 +191,31 @@ valid. Templates never branch on whether the override was supplied.
 
 ## Commands
 
+The three implementations live in the tri-colour layout, matching `airflow`:
+canonical Clojure in `green/` (`green/bb.edn`, `green/deps.edn`, `green/src/`,
+`green/tasks/`, tests under `green/test/clj`), TypeScript/Bun in `red/`, and
+Python/uv in `blue/`. Green is canonical: a behavioural change lands in all
+three colours in the same commit and passes `scripts/parity.sh`, which renders
+both fixtures through every colour and diffs the trees — and the colour
+template trees (`red/resources`, blue's embedded `resources/`) — byte for byte.
+The two fixtures and the goldens are shared across colours at the repository
+root — `test/fixtures/` and `test/resources/golden/` — with
+`green/test/fixtures` and `green/test/resources` symlinks pointing at them.
+Each colour dir holds a launcher symlink to its skill payload (`green/green`,
+`red/red`, `blue/blue`).
+
 ```sh
-bb test
-bb golden
-bb golden:accept
-./scripts/launcher.sh
-./green build
-./green create --dry-run
-./green create                 # requires explicit authorization
-./green delete                 # guarded and destructive
+cd green && bb test
+cd green && bb golden
+cd green && bb golden:accept
+cd red && bun test && bun run typecheck
+cd blue && uv run pytest
+./scripts/parity.sh            # three colours, two fixtures, byte for byte
+./scripts/launcher.sh          # from the repository root
+cd green && ./green build
+cd green && ./green create --dry-run
+cd green && ./green create     # requires explicit authorization
+cd green && ./green delete     # guarded and destructive
 ```
 
 On the host: `netbird-status`, `netbird-backup`, `netbird-restore --verify`.
@@ -210,12 +226,16 @@ must not touch `~/.ssh`.
 
 ## Coupling
 
-The package pins Green and ONCE in `deps.edn`. ONCE supplies the backend
-provider registry, the registrable-domain helper, and the whole SSH keypair
-implementation — so the ONCE pin can never go below `bc06f2f`, the commit that
-moved the machine keypair into the operator's `~/.ssh`. Use `GREEN_LIB_ROOT`,
-`ONCE_LIB_ROOT`, and `NETBIRD_LIB_ROOT` for working-tree development. Final
-launchers use a pushed SHA managed by `bb pin`; deployment launchers are
+The package pins Green and ONCE in `green/deps.edn`, the Red SDK and
+`package-once-red` in `red/package.json`, and the Blue SDK and
+`package-once-blue` in `blue/pyproject.toml`. All three colours pin ONCE at the
+**same rev** — ONCE's own parity is what guarantees its colours agree per
+commit — and the pin can never go below `bc06f2f`, the commit that moved the
+machine keypair into the operator's `~/.ssh`. Use `GREEN_LIB_ROOT`,
+`ONCE_LIB_ROOT`, and `NETBIRD_LIB_ROOT` for working-tree development
+(`NETBIRD_LIB_ROOT` points each colour's launcher at its own implementation
+dir). Final launchers use a pushed SHA managed by `bb pin`, which stamps all
+three payloads from their unpinned birth forms; deployment launchers are
 copies, not symlinks.
 
 ## Documentation

@@ -27,7 +27,7 @@ status=0
 for variant in colors optout; do
   fixture="$tmp/$variant.yml"
   sed "s#WORKDIR#$tmp/work#" "$root/test/fixtures/$variant.yml" > "$fixture"
-  NETBIRD_LIB_ROOT="$root" "$root/green" build -f "$fixture" >/dev/null
+  (cd "$root/green" && NETBIRD_LIB_ROOT="$root/green" ./green build -f "$fixture" >/dev/null)
 
   profile=$(sed -n 's/^profile: //p' "$fixture")
   actual="$tmp/work/$profile"

@@ -1,0 +1,245 @@
+# The NetBird control plane and its identity provider, on one host.
+#
+# Derived from the combined reference that `getting-started.sh` generates —
+# Traefik, the dashboard and one `netbird-server` that is management, signal,
+# relay and STUN in a single process — with the wizard's interactive choices
+# lifted into desired state. The installer itself is deliberately not run; see
+# CLAUDE.md.
+#
+# Authentik joins the same bridge network so Traefik can route to it directly.
+# The upstream article instead sidecars a NetBird client into Authentik's
+# network and exposes it through NetBird's own reverse proxy, which cannot be
+# converged: it needs a setup key that only exists after a human has logged in,
+# and it makes NetBird's auth callbacks depend on a service reachable only
+# through NetBird.
+services:
+
+  traefik:
+    image: <{ netbird-traefik-image }>
+    container_name: netbird-traefik
+    restart: unless-stopped
+    networks:
+      netbird:
+        # Fixed, because netbird-server maps the Authentik hostname to it; see
+        # the extra_hosts note below.
+        ipv4_address: <{ traefik-ip }>
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.email=<{ netbird-letsencrypt-email }>"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      # TLS-ALPN-01 on 443, which is what the upstream reference uses. Port 80
+      # therefore carries only the redirect, and opening it is not what makes
+      # certificate issuance work — resolvable DNS is.
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # gRPC passes through Traefik; without these it dies at the first
+      # long-lived management stream.
+      - "--serverstransport.forwardingtimeouts.responseheadertimeout=0s"
+      - "--serverstransport.forwardingtimeouts.idleconntimeout=0s"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - netbird_traefik_letsencrypt:/letsencrypt
+    labels:
+      # Rate limiting and hardened headers are obligations this package took on
+      # when it chose to publish the IdP directly rather than tunnel it.
+      - traefik.enable=true
+      - traefik.http.middlewares.nb-ratelimit.ratelimit.average=100
+      - traefik.http.middlewares.nb-ratelimit.ratelimit.burst=200
+      - traefik.http.middlewares.nb-secure.headers.stsSeconds=31536000
+      - traefik.http.middlewares.nb-secure.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.nb-secure.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.nb-secure.headers.browserXssFilter=true
+      - traefik.http.middlewares.nb-secure.headers.referrerPolicy=strict-origin-when-cross-origin
+    logging: &logging
+      driver: "json-file"
+      options: {max-size: "100m", max-file: "2"}
+
+  dashboard:
+    image: <{ netbird-dashboard-image }>
+    container_name: netbird-dashboard
+    restart: unless-stopped
+    networks: [netbird]
+    env_file: [./dashboard.env]
+    depends_on: [netbird-server]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.netbird-dashboard.rule=Host(`<{ netbird-host }>`)
+      - traefik.http.routers.netbird-dashboard.entrypoints=websecure
+      - traefik.http.routers.netbird-dashboard.tls=true
+      - traefik.http.routers.netbird-dashboard.tls.certresolver=letsencrypt
+      - traefik.http.routers.netbird-dashboard.service=dashboard
+      - traefik.http.routers.netbird-dashboard.middlewares=nb-secure@docker
+      # Lowest priority: the dashboard is the catch-all for this host, and the
+      # server's routers below must win on their path prefixes.
+      - traefik.http.routers.netbird-dashboard.priority=1
+      - traefik.http.services.dashboard.loadbalancer.server.port=80
+    logging: *logging
+
+  # Management + Signal + Relay + STUN in one process.
+  netbird-server:
+    image: <{ netbird-server-image }>
+    container_name: netbird-server
+    restart: unless-stopped
+    networks: [netbird]
+    ports:
+      # The only UDP the firewall opens. STUN is bundled here; there is no
+      # coturn container in this architecture and therefore no TURN secret.
+      - "<{ netbird-stun-port }>:<{ netbird-stun-port }>/udp"
+    environment:
+      # Enables `POST /api/setup` to mint a one-time PAT, which is the only
+      # supported way to bootstrap the first owner without a browser.
+      - NB_SETUP_PAT_ENABLED=true
+    # Registering an identity provider makes the server fetch the issuer's
+    # discovery document, and it must use the **public** issuer URL — the
+    # issuer in a token has to be the one a browser saw. Left alone, the
+    # container resolves that name to this host's own public address and the
+    # request dies in hairpin NAT: `identity provider issuer is unreachable`,
+    # HTTP 422, on a stack where every container is healthy and the same URL
+    # answers instantly from the host. Pointing the name at Traefik on the
+    # shared network keeps the URL, the certificate and the issuer string
+    # identical while the packet never leaves the box.
+    extra_hosts:
+      - "<{ netbird-authentik-host }>:<{ traefik-ip }>"
+    volumes:
+      - netbird_data:/var/lib/netbird
+      - ./config.yaml:/etc/netbird/config.yaml:ro
+    command: ["--config", "/etc/netbird/config.yaml"]
+    labels:
+      - traefik.enable=true
+      # gRPC needs an h2c backend; without a separate service definition the
+      # management and signal streams never establish.
+      - traefik.http.routers.netbird-grpc.rule=Host(`<{ netbird-host }>`) && (PathPrefix(`/signalexchange.SignalExchange/`) || PathPrefix(`/management.ManagementService/`) || PathPrefix(`/management.ProxyService/`))
+      - traefik.http.routers.netbird-grpc.entrypoints=websecure
+      - traefik.http.routers.netbird-grpc.tls=true
+      - traefik.http.routers.netbird-grpc.tls.certresolver=letsencrypt
+      - traefik.http.routers.netbird-grpc.service=netbird-server-h2c
+      - traefik.http.routers.netbird-grpc.priority=100
+      - traefik.http.routers.netbird-backend.rule=Host(`<{ netbird-host }>`) && (PathPrefix(`/relay`) || PathPrefix(`/ws-proxy/`) || PathPrefix(`/api`) || PathPrefix(`/oauth2`))
+      - traefik.http.routers.netbird-backend.entrypoints=websecure
+      - traefik.http.routers.netbird-backend.tls=true
+      - traefik.http.routers.netbird-backend.tls.certresolver=letsencrypt
+      - traefik.http.routers.netbird-backend.service=netbird-server
+      - traefik.http.routers.netbird-backend.middlewares=nb-ratelimit@docker,nb-secure@docker
+      - traefik.http.routers.netbird-backend.priority=100
+      - traefik.http.services.netbird-server.loadbalancer.server.port=80
+      - traefik.http.services.netbird-server-h2c.loadbalancer.server.port=80
+      - traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme=h2c
+    # No healthcheck, deliberately. The image carries neither wget nor curl, so
+    # every in-container HTTP probe fails closed and `--wait` would hang on a
+    # server that is running perfectly. Upstream's reference compose omits it
+    # for the same reason; readiness is asserted from the host instead, against
+    # the public OIDC discovery document — which is also what upstream's own
+    # installer polls, and proves Traefik, ACME and the embedded IdP at once.
+    logging: *logging
+
+  # --- Authentik ------------------------------------------------------------
+  # Bound to loopback on the host for nothing at all: reachable only over the
+  # compose network and through Traefik. The article opens 9000 for first-run
+  # setup and tells you to close it afterwards; bootstrapping headlessly means
+  # it is never opened.
+
+  authentik-postgres:
+    image: <{ netbird-authentik-postgres-image }>
+    container_name: netbird-authentik-postgres
+    restart: unless-stopped
+    networks: [netbird]
+    env_file: [./authentik.env]
+    environment:
+      - POSTGRES_USER=authentik
+      - POSTGRES_DB=authentik
+    volumes:
+      - authentik_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  authentik-redis:
+    image: <{ netbird-authentik-redis-image }>
+    container_name: netbird-authentik-redis
+    restart: unless-stopped
+    networks: [netbird]
+    command: ["--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - authentik_redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  authentik-server:
+    image: <{ netbird-authentik-image }>
+    container_name: netbird-authentik-server
+    restart: unless-stopped
+    command: server
+    networks: [netbird]
+    env_file: [./authentik.env]
+    volumes:
+      - authentik_media:/media
+      - authentik_certs:/certs
+      - ./blueprints:/blueprints/custom:ro
+    depends_on:
+      authentik-postgres: {condition: service_healthy}
+      authentik-redis: {condition: service_healthy}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.authentik.rule=Host(`<{ netbird-authentik-host }>`)
+      - traefik.http.routers.authentik.entrypoints=websecure
+      - traefik.http.routers.authentik.tls=true
+      - traefik.http.routers.authentik.tls.certresolver=letsencrypt
+      - traefik.http.routers.authentik.service=authentik
+      - traefik.http.routers.authentik.middlewares=nb-ratelimit@docker,nb-secure@docker
+      - traefik.http.services.authentik.loadbalancer.server.port=9000
+    healthcheck:
+      test: ["CMD-SHELL", "ak healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+    logging: *logging
+
+  authentik-worker:
+    image: <{ netbird-authentik-image }>
+    container_name: netbird-authentik-worker
+    restart: unless-stopped
+    command: worker
+    networks: [netbird]
+    env_file: [./authentik.env]
+    volumes:
+      - authentik_media:/media
+      - authentik_certs:/certs
+      - ./blueprints:/blueprints/custom:ro
+    depends_on:
+      authentik-postgres: {condition: service_healthy}
+      authentik-redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "ak healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+    logging: *logging
+
+volumes:
+  netbird_data:
+  netbird_traefik_letsencrypt:
+  authentik_postgres:
+  authentik_redis:
+  authentik_media:
+  authentik_certs:
+
+networks:
+  netbird:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: <{ netbird-docker-subnet }>

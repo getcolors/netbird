@@ -1,0 +1,359 @@
+---
+# Convergence for the NetBird control plane and its identity provider.
+#
+# The shape of this play is set by what fails silently here. A green stack
+# proves almost nothing about NetBird: Traefik answers 443 with a self-signed
+# certificate when ACME has failed, Authentik reports healthy while a blueprint
+# it never applied leaves the OAuth2 provider missing, the device-code grant is
+# a separate flow from the browser login and is absent by default, and a
+# working dashboard says nothing about whether two peers can exchange a packet.
+# So each stage asks a component what it actually has.
+- name: Converge the NetBird control plane
+  hosts: netbird
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - ansible.builtin.wait_for_connection: {connect_timeout: 10, delay: 5, sleep: 5, timeout: 600}
+    - ansible.builtin.setup:
+  tasks:
+    - name: Install Docker and tooling
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, ca-certificates, curl, jq, openssl, gnupg, gzip, dnsutils]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - ansible.builtin.systemd_service: {name: docker, enabled: true, state: started}
+
+    - ansible.builtin.file: {path: "{{ item.p }}", state: directory, mode: "{{ item.m }}"}
+      loop:
+        - {p: /opt/netbird, m: "0755"}
+        - {p: /opt/netbird/blueprints, m: "0755"}
+        - {p: /etc/netbird, m: "0700"}
+        - {p: /etc/netbird/secrets, m: "0700"}
+        - {p: /etc/netbird/state, m: "0700"}
+        - {p: "<{ netbird-backup-dir }>", m: "0700"}
+
+    # --- create-once secrets ------------------------------------------------
+    #
+    # `creates:` is what makes these create-once, and create-once is what keeps
+    # the deployment alive. Regenerating any of them breaks a running stack
+    # while every container still reports healthy: a new store encryption key
+    # orphans the peer database, a new Authentik SECRET_KEY invalidates every
+    # session and stored token, a new OIDC secret breaks login on the next
+    # token exchange. None of them is ever rendered into .colors/.
+    - name: Generate the host's secrets once
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        gen() { [[ -s "$1" ]] || printf '%s' "$2" > "$1"; chmod 0600 "$1"; }
+        gen /etc/netbird/secrets/relay_auth_secret        "$(openssl rand -base64 32 | tr -d '=')"
+        gen /etc/netbird/secrets/session_cookie_key       "$(openssl rand -base64 32)"
+        gen /etc/netbird/secrets/datastore_encryption_key "$(openssl rand -base64 32)"
+        gen /etc/netbird/secrets/authentik_secret_key     "$(openssl rand -base64 60 | tr -d '\n')"
+        gen /etc/netbird/secrets/authentik_pg_password    "$(openssl rand -hex 24)"
+        gen /etc/netbird/secrets/authentik_bootstrap_token "$(openssl rand -hex 32)"
+        gen /etc/netbird/secrets/oidc_client_secret       "$(openssl rand -hex 32)"
+        gen /etc/netbird/secrets/acceptance_password      "$(openssl rand -base64 24)"
+      args: {executable: /bin/bash}
+      changed_when: false
+
+    # The two operator passwords and the backup recovery key arrive as Ansible
+    # lookups resolved at execution time, so the rendered playbook in .colors/
+    # carries the expression and never the value.
+    - name: Install the operator-supplied credentials
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        mode: "0600"
+        content: "{{ item.content }}"
+      loop:
+        - dest: /etc/netbird/secrets/bootstrap_password
+          content: "{{ lookup('env','COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD') }}"
+        - dest: /etc/netbird/secrets/authentik_bootstrap_password
+          content: "{{ lookup('env','COLORS_PAR_NETBIRD_AUTHENTIK_BOOTSTRAP_PASSWORD') }}"
+        - dest: /etc/netbird/secrets/backup_recovery_key
+          content: "{{ lookup('env','COLORS_PAR_NETBIRD_BACKUP_RECOVERY_KEY') }}"
+      loop_control: {label: "{{ item.dest }}"}
+      no_log: true
+
+    - name: Install the backup credentials
+      ansible.builtin.copy:
+        dest: /etc/netbird/secrets/backup.env
+        mode: "0600"
+        content: |
+          AWS_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_NETBIRD_BACKUP_R2_ACCESS_KEY_ID') }}
+          AWS_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_NETBIRD_BACKUP_R2_SECRET_ACCESS_KEY') }}
+      no_log: true
+
+    - name: Refuse to converge with an empty credential
+      ansible.builtin.assert:
+        that:
+          - lookup('env','COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD') | length >= 12
+          - lookup('env','COLORS_PAR_NETBIRD_AUTHENTIK_BOOTSTRAP_PASSWORD') | length >= 12
+          - lookup('env','COLORS_PAR_NETBIRD_BACKUP_RECOVERY_KEY') | length >= 16
+        fail_msg: >-
+          a required credential is empty or too short; an empty bootstrap
+          password would create an owner account anyone can claim
+      no_log: true
+
+    # --- configuration ------------------------------------------------------
+
+    - name: Stage configuration templates
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode | default('0644') }}"
+      loop:
+        - {src: compose.yml, dest: /opt/netbird/compose.yml}
+        - {src: dashboard.env, dest: /opt/netbird/dashboard.env}
+        - {src: config.yaml, dest: /etc/netbird/config.yaml.tmpl, mode: "0600"}
+        - {src: blueprint.yaml, dest: /etc/netbird/blueprint.yaml.tmpl, mode: "0600"}
+        - {src: bootstrap.sh, dest: /usr/local/sbin/netbird-bootstrap, mode: "0755"}
+        - {src: federated-login.py, dest: /usr/local/sbin/netbird-federated-login, mode: "0755"}
+        - {src: smoke.sh, dest: /usr/local/sbin/netbird-smoke, mode: "0755"}
+        - {src: s3.py, dest: /usr/local/sbin/netbird-s3, mode: "0755"}
+        - {src: backup.sh, dest: /usr/local/sbin/netbird-backup, mode: "0755"}
+        - {src: restore.sh, dest: /usr/local/sbin/netbird-restore, mode: "0755"}
+        - {src: status.sh, dest: /usr/local/sbin/netbird-status, mode: "0755"}
+      register: staged
+      notify: Converge containers
+
+    # Substitution happens here rather than in the Selmer templates so the
+    # secrets never enter .colors/. Rendering to a temporary file and comparing
+    # is what keeps this idempotent: a plain copy-then-replace would rewrite the
+    # file on every converge and restart the server each time.
+    - name: Render the server configuration with its secrets
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        s=/etc/netbird/secrets
+        sed -e "s|__RELAY_AUTH_SECRET__|$(cat $s/relay_auth_secret)|" \
+            -e "s|__SESSION_COOKIE_ENCRYPTION_KEY__|$(cat $s/session_cookie_key)|" \
+            -e "s|__DATASTORE_ENCRYPTION_KEY__|$(cat $s/datastore_encryption_key)|" \
+            /etc/netbird/config.yaml.tmpl > /tmp/.config.rendered
+        if ! cmp -s /tmp/.config.rendered /opt/netbird/config.yaml; then
+          install -m 0600 /tmp/.config.rendered /opt/netbird/config.yaml; echo CHANGED
+        fi
+        rm -f /tmp/.config.rendered
+      args: {executable: /bin/bash}
+      register: cfg
+      changed_when: "'CHANGED' in cfg.stdout"
+      notify: Recreate the NetBird server
+
+    - name: Render the Authentik blueprint with its client secret
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        sed -e "s|__OIDC_CLIENT_SECRET__|$(cat /etc/netbird/secrets/oidc_client_secret)|" \
+            /etc/netbird/blueprint.yaml.tmpl > /tmp/.bp.rendered
+        if ! cmp -s /tmp/.bp.rendered /opt/netbird/blueprints/netbird.yaml; then
+          install -m 0644 /tmp/.bp.rendered /opt/netbird/blueprints/netbird.yaml; echo CHANGED
+        fi
+        rm -f /tmp/.bp.rendered
+      args: {executable: /bin/bash}
+      register: bp
+      changed_when: "'CHANGED' in bp.stdout"
+
+    # Bootstrap credentials are one-shot. They are written only while Authentik
+    # has never been initialised; once the admin and the blueprint exist they
+    # are removed from the steady-state environment and the token is revoked,
+    # because a standing credential with no remaining purpose is just exposure.
+    - name: Decide whether Authentik still needs bootstrapping
+      ansible.builtin.stat: {path: /etc/netbird/state/authentik-bootstrapped}
+      register: ak_done
+
+    - name: Render the Authentik environment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        s=/etc/netbird/secrets
+        need_bootstrap="{{ 'yes' if not ak_done.stat.exists else 'no' }}"
+        {
+          echo "AUTHENTIK_SECRET_KEY=$(cat $s/authentik_secret_key)"
+          echo "AUTHENTIK_POSTGRESQL__HOST=authentik-postgres"
+          echo "AUTHENTIK_POSTGRESQL__USER=authentik"
+          echo "AUTHENTIK_POSTGRESQL__NAME=authentik"
+          echo "AUTHENTIK_POSTGRESQL__PASSWORD=$(cat $s/authentik_pg_password)"
+          echo "POSTGRES_PASSWORD=$(cat $s/authentik_pg_password)"
+          echo "AUTHENTIK_REDIS__HOST=authentik-redis"
+          echo "AUTHENTIK_ERROR_REPORTING__ENABLED=false"
+          echo "AUTHENTIK_DISABLE_UPDATE_CHECK=true"
+          echo "AUTHENTIK_AVATARS=initials"
+          if [[ "$need_bootstrap" == yes ]]; then
+            echo "AUTHENTIK_BOOTSTRAP_EMAIL=<{ netbird-authentik-bootstrap-email }>"
+            echo "AUTHENTIK_BOOTSTRAP_PASSWORD=$(cat $s/authentik_bootstrap_password)"
+            echo "AUTHENTIK_BOOTSTRAP_TOKEN=$(cat $s/authentik_bootstrap_token)"
+          fi
+        } > /tmp/.ak.env
+        if ! cmp -s /tmp/.ak.env /opt/netbird/authentik.env; then
+          install -m 0600 /tmp/.ak.env /opt/netbird/authentik.env; echo CHANGED
+        fi
+        rm -f /tmp/.ak.env
+      args: {executable: /bin/bash}
+      register: akenv
+      changed_when: "'CHANGED' in akenv.stdout"
+
+    - name: Install the backup timer
+      ansible.builtin.copy: {src: "{{ item.src }}", dest: "{{ item.dest }}", mode: "0644"}
+      loop:
+        - {src: backup.service, dest: /etc/systemd/system/netbird-backup.service}
+        - {src: backup.timer, dest: /etc/systemd/system/netbird-backup.timer}
+        - {src: backup-failure.service, dest: /etc/systemd/system/netbird-backup-failure.service}
+      notify: Reload systemd
+
+    - ansible.builtin.meta: flush_handlers
+
+    # --- readiness ----------------------------------------------------------
+    #
+    # Traefik asks Let's Encrypt for a certificate the moment it starts, and
+    # TLS-ALPN-01 only succeeds once the name resolves to this host. Starting
+    # before that burns failure budget against a rate limit measured in weeks,
+    # so both names are confirmed against public resolvers first. The DNS stage
+    # having returned is not the same fact.
+    - name: Wait for public DNS to carry both names
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for name in <{ netbird-host }> <{ netbird-authentik-host }>; do
+          for resolver in 1.1.1.1 8.8.8.8; do
+            got=$(dig +short @$resolver A "$name" | tail -1)
+            [[ "$got" == "<{ ip }>" ]] || { echo "$name via $resolver = '${got:-none}'"; exit 1; }
+          done
+        done
+      args: {executable: /bin/bash}
+      register: dns_ready
+      changed_when: false
+      retries: 60
+      delay: 15
+      until: dns_ready.rc == 0
+
+    - name: Converge pinned containers
+      ansible.builtin.command: docker compose up -d --remove-orphans --wait
+      args: {chdir: /opt/netbird}
+      register: compose_up
+      changed_when: "'Created' in (compose_up.stdout + compose_up.stderr) or 'Recreated' in (compose_up.stdout + compose_up.stderr) or 'Started' in (compose_up.stdout + compose_up.stderr)"
+
+    # Readiness from the outside, because that is the only place it can be
+    # observed: the server image has no HTTP client to probe itself with. This
+    # one request proves Traefik is routing, ACME issued a real certificate,
+    # and the embedded IdP is serving discovery — and it is the same endpoint
+    # upstream's installer waits on.
+    - name: Wait for the NetBird server to serve OIDC discovery
+      ansible.builtin.uri:
+        url: "https://<{ netbird-host }>/oauth2/.well-known/openid-configuration"
+        return_content: true
+      register: nb_health
+      retries: 60
+      delay: 10
+      until:
+        - nb_health is succeeded
+        - nb_health.json.issuer is defined
+
+    # A healthy Authentik container is not an applied blueprint: the worker
+    # applies them asynchronously, and a failed one leaves the stack green with
+    # no OAuth2 provider at all. So ask for the objects — and for the blueprint
+    # instance's own status, which is what distinguishes "applied" from
+    # "partially applied".
+    #
+    # Asked through `ak`, the container's own CLI, rather than over HTTP. The
+    # image carries no HTTP client, and every API credential here is
+    # deliberately short-lived: the bootstrap token is revoked once Authentik
+    # is initialised, so an API-based check passes on the first converge and
+    # then 403s on every one after it. Both mistakes were made here in turn.
+    - name: Prove the Authentik blueprint applied
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose -f /opt/netbird/compose.yml exec -T authentik-server ak shell -c "
+        from authentik.blueprints.models import BlueprintInstance
+        from authentik.providers.oauth2.models import OAuth2Provider
+        from authentik.core.models import Application
+        from authentik.brands.models import Brand
+        checks = {
+            'instance': BlueprintInstance.objects.filter(
+                name='netbird-oidc', status='successful').count() == 1,
+            'provider': OAuth2Provider.objects.filter(
+                client_id='<{ netbird-oidc-client-id }>').count() == 1,
+            'application': Application.objects.filter(slug='netbird').count() == 1,
+            # The device-code grant needs a flow *assigned as the brand
+            # default*, not merely declared. Without it CLI enrolment fails
+            # while the dashboard keeps working.
+            # An empty grant_types list is a provider that permits nothing,
+            # and it is the default.
+            'device_grant': 'urn:ietf:params:oauth:grant-type:device_code' in (
+                OAuth2Provider.objects.filter(
+                    client_id='<{ netbird-oidc-client-id }>'
+                ).values_list('grant_types', flat=True).first() or []),
+            'device_code_flow': Brand.objects.filter(
+                domain='<{ netbird-authentik-host }>',
+                flow_device_code__isnull=False).count() == 1,
+        }
+        print('BLUEPRINT_RESULT ' + repr(checks))
+        print('BLUEPRINT_OK' if all(checks.values()) else 'BLUEPRINT_INCOMPLETE')
+        " 2>/dev/null | grep -q BLUEPRINT_OK
+      args: {executable: /bin/bash}
+      register: bp_applied
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: bp_applied.rc == 0
+
+    # Discovery must advertise the device-authorization endpoint, because
+    # `netbird up` on a CLI client uses the device-code grant and a working
+    # browser login is no evidence that it exists.
+    - name: Prove OIDC discovery is complete
+      ansible.builtin.uri:
+        url: "https://<{ netbird-authentik-host }>/application/o/netbird/.well-known/openid-configuration"
+        return_content: true
+      register: disco
+      retries: 30
+      delay: 10
+      until:
+        - disco is succeeded
+        - disco.json.authorization_endpoint is defined
+        - disco.json.device_authorization_endpoint is defined
+        - disco.json.jwks_uri is defined
+
+    - name: Bootstrap the control plane
+      ansible.builtin.command: /usr/local/sbin/netbird-bootstrap
+      register: bootstrap
+      changed_when: "'created' in bootstrap.stderr or 'registered' in bootstrap.stderr or 'rotated' in bootstrap.stderr"
+
+    - name: Record that Authentik has been bootstrapped
+      ansible.builtin.file: {path: /etc/netbird/state/authentik-bootstrapped, state: touch, mode: "0600"}
+      changed_when: false
+
+    # Now that the admin and the blueprint exist, the bootstrap token has no
+    # remaining purpose. Revoking it closes a standing credential.
+    - name: Revoke the Authentik bootstrap token
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose -f /opt/netbird/compose.yml exec -T authentik-server \
+          ak shell -c "
+        from authentik.core.models import Token
+        Token.objects.filter(identifier='authentik-bootstrap-token').delete()
+        " >/dev/null 2>&1 || true
+        touch /etc/netbird/state/bootstrap-token-revoked
+      args: {executable: /bin/bash, creates: /etc/netbird/state/bootstrap-token-revoked}
+
+    - name: Enable the backup timer
+      ansible.builtin.systemd_service: {name: netbird-backup.timer, enabled: true, state: started}
+
+    - name: Take the first backup
+      ansible.builtin.command: /usr/local/sbin/netbird-backup
+      args: {creates: /etc/netbird/state/first-backup-done}
+
+    - name: Prove the data plane carries traffic
+      ansible.builtin.command: /usr/local/sbin/netbird-smoke
+      register: smoke
+      changed_when: false
+      retries: 2
+      delay: 20
+      until: smoke.rc == 0
+
+  handlers:
+    - name: Converge containers
+      ansible.builtin.command: docker compose up -d --remove-orphans
+      args: {chdir: /opt/netbird}
+    - name: Recreate the NetBird server
+      ansible.builtin.command: docker compose up -d --force-recreate netbird-server
+      args: {chdir: /opt/netbird}
+    - name: Reload systemd
+      ansible.builtin.systemd_service: {daemon_reload: true}
