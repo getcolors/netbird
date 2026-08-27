@@ -24,6 +24,11 @@
        "# [tool.uv.sources]\n"
        "# package-netbird-blue = { git = \"https://github.com/getcolors/netbird.git\", rev = \"" sha "\", subdirectory = \"blue\" }\n"
        "# blue = { git = \"https://github.com/getcolors/blue.git\", rev = \"290f313ead5ca162875c33a049c880da017eae09\" }\n"
+       "#\n"
+       ;; package-once-blue carries its own, older blue pin; the override makes
+       ;; this package's blue pin win, as it does in blue/pyproject.toml.
+       "# [tool.uv]\n"
+       "# override-dependencies = [\"blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09\"]\n"
        "# ///"))
 (defn stamp-blue [s sha]
   ;; First stamp is structural: the metadata block gains its git sources and the

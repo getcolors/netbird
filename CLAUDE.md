@@ -233,8 +233,8 @@ The package pins Green and ONCE in `green/deps.edn`, the Red SDK and
 commit — and the pin can never go below `bc06f2f`, the commit that moved the
 machine keypair into the operator's `~/.ssh`. Use `GREEN_LIB_ROOT`,
 `ONCE_LIB_ROOT`, and `NETBIRD_LIB_ROOT` for working-tree development
-(`NETBIRD_LIB_ROOT` points each colour's launcher at its own implementation
-dir). Final launchers use a pushed SHA managed by `bb pin`, which stamps all
+(`NETBIRD_LIB_ROOT` names the repository root for every colour; red also
+accepts the `red/` dir directly). Final launchers use a pushed SHA managed by `bb pin`, which stamps all
 three payloads from their unpinned birth forms; deployment launchers are
 copies, not symlinks.
 

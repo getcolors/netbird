@@ -25,7 +25,7 @@ build_variant() {
     sed "s#WORKDIR#$tmp/$variant/$colour#" "$root/test/fixtures/$variant.yml" \
       > "$tmp/$variant-$colour.yml"
   done
-  (cd "$root/green" && NETBIRD_LIB_ROOT="$root/green" ./green build -f "$tmp/$variant-green.yml" >/dev/null)
+  (cd "$root/green" && NETBIRD_LIB_ROOT="$root" ./green build -f "$tmp/$variant-green.yml" >/dev/null)
   (cd "$root/red" && NETBIRD_LIB_ROOT="$root/red" ./red build -f "$tmp/$variant-red.yml" >/dev/null)
   (cd "$root/blue" && uv run python -m package_netbird_blue build -f "$tmp/$variant-blue.yml" >/dev/null)
   diff -r "$tmp/$variant/green" "$tmp/$variant/red"

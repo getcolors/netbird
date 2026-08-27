@@ -1,25 +1,20 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["package-netbird-blue", "blue"]
+#
+# [tool.uv.sources]
+# package-netbird-blue = { git = "https://github.com/getcolors/netbird.git", rev = "2dbe706204d47e377b7c1e46ae85996bf5c0b9fc", subdirectory = "blue" }
+# blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
+#
+# [tool.uv]
+# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09"]
 # ///
 #
 # Managed by `bb pin` — do not edit by hand, and never invent a SHA.
 #
-# UNPINNED: this repository has not been pushed and stamped, so the inline
-# metadata above deliberately carries no package-netbird-blue git source. A
-# launcher that cannot resolve its own library says so rather than inventing a
-# SHA or silently falling back to whatever is lying around; `bb pin` refuses to
-# stamp a dirty or unpushed HEAD for the same reason. Once stamped, the block
-# above reads:
-#
-#   # dependencies = ["package-netbird-blue", "blue"]
-#   #
-#   # [tool.uv.sources]
-#   # package-netbird-blue = { git = "https://github.com/getcolors/netbird.git", rev = "<sha stamped by bb pin>", subdirectory = "blue" }
-#   # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
-#
-# Point it at a checkout meanwhile: NETBIRD_LIB_ROOT=/path/to/netbird
+# Stamped by `bb pin`. NETBIRD_LIB_ROOT=/path/to/netbird still overrides the
+# pin with a working tree.
 """Thin launcher for package-netbird-blue.
 
 This file is both the skill payload and the repository entry point —

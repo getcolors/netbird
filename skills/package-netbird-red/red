@@ -36,7 +36,7 @@ import { homedir } from "node:os";
 // directory, which would halt Bun's upward resolution of `package-netbird-red`
 // and break the development symlink at red/red.
 const PINS = {
-  "package-netbird-red": null,
+  "package-netbird-red": "github:getcolors/netbird#2dbe706204d47e377b7c1e46ae85996bf5c0b9fc",
   "package-once-red": "github:getcolors/once#759eb0311b4bdf881eab813cfe5d00f76b9310cc",
   "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
 };
@@ -162,7 +162,10 @@ try {
   const libRoot = process.env.NETBIRD_LIB_ROOT;
   const redDir = checkoutRedDir();
   if (libRoot) {
-    netbird = await importWorkingTree(libRoot, "NETBIRD_LIB_ROOT");
+    // The repository root (the convention every colour shares) or the red/
+    // colour dir itself both work.
+    const overrideDir = existsSync(join(libRoot, "red", "src", "index.ts")) ? join(libRoot, "red") : libRoot;
+    netbird = await importWorkingTree(overrideDir, "NETBIRD_LIB_ROOT");
   } else if (redDir || process.env.RED_NO_BOOTSTRAP) {
     // Resolution starts beside the launcher, not at the caller, so the answer
     // is the same from any subdirectory a colour was invoked from.
@@ -176,7 +179,7 @@ try {
       "red: this launcher carries no netbird pin.\n" +
         "It has not been stamped by `bb pin`, which cannot run until the " +
         "netbird repository has been pushed.\n" +
-        "Point it at a checkout meanwhile: NETBIRD_LIB_ROOT=/path/to/netbird/red",
+        "Point it at a checkout meanwhile: NETBIRD_LIB_ROOT=/path/to/netbird",
     );
     process.exit(2);
   } else {

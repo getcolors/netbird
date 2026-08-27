@@ -51,7 +51,7 @@
 ;; cannot resolve its own library says so rather than inventing a SHA or
 ;; silently falling back to whatever is lying around. `bb pin` refuses to stamp
 ;; a dirty or unpushed HEAD for the same reason.
-(def ^:private netbird-sha "7b0f784a17d453e0b2ec726d9a37e84db78e84d4")
+(def ^:private netbird-sha "2dbe706204d47e377b7c1e46ae85996bf5c0b9fc")
 
 (def ^:private netbird-git-url "https://github.com/getcolors/netbird.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
@@ -70,7 +70,7 @@
 
 (def ^:private bootstrap-error
   (when (and (System/getProperty "babashka.version") (not resolved?))
-    (let [netbird (lib-coord "NETBIRD_LIB_ROOT" netbird-git-url netbird-sha nil)
+    (let [netbird (lib-coord "NETBIRD_LIB_ROOT" netbird-git-url netbird-sha "green")
           green (lib-coord "GREEN_LIB_ROOT" green-git-url nil nil)
           once (lib-coord "ONCE_LIB_ROOT" once-git-url nil "green")]
       (if-not netbird
