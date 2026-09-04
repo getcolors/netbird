@@ -30,7 +30,7 @@ chmod +x green
 
   <h2>Architecture</h2>
   <div class="grid">
-    <div class="card"><h3>Compute</h3><p>One Vultr instance and a firewall opening 22, 80 and 443, plus UDP 3478 for STUN,. In keygen mode the account SSH key resource is named after the profile and lives in this deployment's state.</p></div>
+    <div class="card"><h3>Compute</h3><p>One Vultr instance and a firewall opening 22, 80 and 443, plus UDP 3478 for STUN. In keygen mode the account SSH key resource is named after the profile and lives in this deployment's state.</p></div>
     <div class="card"><h3>DNS</h3><p>Two <strong>unproxied</strong> Cloudflare <code>A</code> records, one per hostname; Traefik obtains TLS from Let's Encrypt over TLS-ALPN-01. Proxying would break both UDP STUN and the challenge.</p></div>
     <div class="card"><h3>Server</h3><p>Docker Compose: Traefik, the combined <code>netbird-server</code>, the dashboard, and Authentik with its Postgres and Redis — every image pinned by its own key in <code>colors.yml</code>.</p></div>
     <div class="card"><h3>Acceptance</h3><p>Convergence enrols two throwaway peers on isolated networks and proves traffic flows over the relay; the workflow then validates both certificates through the system trust store and asserts the internal ports refuse connections.</p></div>
