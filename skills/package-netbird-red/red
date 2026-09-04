@@ -36,7 +36,7 @@ import { homedir } from "node:os";
 // directory, which would halt Bun's upward resolution of `package-netbird-red`
 // and break the development symlink at red/red.
 const PINS = {
-  "package-netbird-red": "github:getcolors/netbird#9bd5d561df7ee56e185080cf3d2dd6acf5aa4073",
+  "package-netbird-red": "github:getcolors/netbird#734d229c5e59634af0e2cd98e8063a554d55ad29",
   "package-once-red": "github:getcolors/once#759eb0311b4bdf881eab813cfe5d00f76b9310cc",
   "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
 };
