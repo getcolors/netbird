@@ -189,6 +189,54 @@ firewall and every derived label come from `validate/compute-name`, which
 returns the profile unless an optional `vultr-name` override is present and
 valid. Templates never branch on whether the override was supplied.
 
+## The Compute Provider Standard
+
+This package conforms to `../workspace/standards/compute-provider.md` with a
+one-entry registry: `vultr` is the only advertised provider, its template lives
+under `tools/infrastructure/vultr/`, and the compute stage's `params` output
+records `provider = "vultr"` — the line that makes a later provider switch
+decidable. Provider switching is a rebuild, never an apply: on every real
+`create` and `delete` the recorded `params` are read **before** the provider
+credentials are validated, and a recorded provider that differs from the
+selected one is refused with `state holds a <recorded> machine; set
+provider-compute back to <recorded> and delete first`. A state recorded before
+this package adopted the standard carries no provider and is a Vultr machine,
+which is what `default-compute-provider` is for. An unreadable backend is no
+state on a create (a fresh clone has none) and fails a delete closed rather
+than proceeding with nothing to address, and a real create whose compute
+output carries no `ip` refuses to converge against the documentation address.
+
+The operations behind all of that are not this package's code. ONCE's
+`compute` namespace (`io.github.getcolors.once.compute`, the `compute` export
+of `package-once-red`, `package_once_blue.compute`) implements the standard:
+selection, the CIDR grammar and the network contract, the name rules, the
+switch and legacy-state refusals, the missing-`ip` refusal, the state read and
+its adoption. What lives here is the data and the wiring — the registry, the
+default provider, the `spec` value in each colour's `validate` that hands both
+plus the sources map to ONCE, the template, the fixtures and goldens,
+`state-output`, and the `start-step` preflight that calls ONCE's functions in
+the order above with a thunk carrying the event, so a delete still asks for no
+account password. `compute-name`, `compute-key`, `cidrs`, `fallback-params`
+and `resolved-compute` remain as package-named aliases so `tools` and the tests
+read as before. The pure-function matrix (CIDR table, name rules, per-provider
+checks, the switch rules) is tested in ONCE, in all three colours and by its
+parity drivers; this repository tests the wiring — one test per safety
+boundary through `start-step` — and one spec-content test per colour, so a
+colour whose spec drifts fails in that colour. ONCE validates the *resolved*
+machine name against Vultr's rules and blames `vultr-name` or the profile,
+which is stricter than the override-only check this package used to carry;
+that is accepted.
+
+One deliberate extension beyond the standard's §5 network contract: the
+provider firewall admits inbound UDP on `netbird-stun-port` from
+`vultr-stun-sources` as well as 22, 80 and 443 from the two source keys the
+standard names. STUN is the one UDP port the combined server publishes (see
+"Why there is no coturn container"), and the third list rides the same
+delegation — `spec` names it as a `:may-be-empty` source, so an empty
+`vultr-stun-sources` means no public STUN, an empty `vultr-ssh-sources` is
+refused, and every entry of all three must be a syntactically valid IPv4 or
+IPv6 CIDR before any provider call.
+
 ## Commands
 
 The three implementations live in the tri-colour layout, matching `airflow`:
@@ -230,8 +278,14 @@ The package pins Green and ONCE in `green/deps.edn`, the Red SDK and
 `package-once-red` in `red/package.json`, and the Blue SDK and
 `package-once-blue` in `blue/pyproject.toml`. All three colours pin ONCE at the
 **same rev** — ONCE's own parity is what guarantees its colours agree per
-commit — and the pin can never go below `bc06f2f`, the commit that moved the
-machine keypair into the operator's `~/.ssh`. Use `GREEN_LIB_ROOT`,
+commit. ONCE supplies the backend provider registry, the registrable-domain
+helper, the whole SSH standard implementation, and the Compute Provider
+Standard's operations (`compute`) — so the ONCE pin can never go below
+`38e3cd6`, where `read-state` trusts the SDK's step error alone, which in turn
+needs the green SDK at `3f33f5d` or above, where a tofu launch failure is
+reported as that step error rather than a raw exception; below those, `04f9623`
+added `compute` and `bc06f2f` moved the machine keypair into the operator's
+`~/.ssh`. The two pins move together. Use `GREEN_LIB_ROOT`,
 `ONCE_LIB_ROOT`, and `NETBIRD_LIB_ROOT` for working-tree development
 (`NETBIRD_LIB_ROOT` names the repository root for every colour; red also
 accepts the `red/` dir directly). Final launchers use a pushed SHA managed by `bb pin`, which stamps all

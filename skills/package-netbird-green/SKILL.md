@@ -21,6 +21,22 @@ Ansible for Traefik, the combined `netbird-server`, the dashboard and Authentik.
 Exit code 2 is validation or usage failure and lists every problem at once. The
 launcher walks up from the working directory to find `colors.yml`.
 
+## Compute provider
+
+`provider-compute: vultr` is the one advertised provider (Compute Provider
+Standard); its credential is `COLORS_PAR_VULTR_API_KEY`. Its keys are
+`vultr-region`, `vultr-plan`, `vultr-os-id`, and three firewall source lists:
+`vultr-ssh-sources` (22, must list at least one CIDR), `vultr-http-sources`
+(80 and 443, may be empty for no public HTTP) and `vultr-stun-sources` (the
+STUN UDP port, may be empty for no public STUN). Every entry must be a valid
+IPv4 or IPv6 CIDR and is refused before any provider call. `vultr-name` and
+`vultr-ssh-keys` are optional; see `references/configuration.md`.
+
+Switching `provider-compute` on a profile that already holds a machine is a
+rebuild, never an apply: `create` and `delete` refuse with `state holds a
+<recorded> machine; set provider-compute back to <recorded> and delete first`,
+before any credential is checked.
+
 ## Before you converge
 
 - Both hostnames must be free in the Cloudflare zone. The DNS stage creates

@@ -5,6 +5,7 @@ import * as tofu from "red/tofu";
 import { runtime } from "red/runtime";
 import type { Opts } from "red/workflow";
 import { failed } from "red/workflow";
+import { compute } from "package-once-red";
 import * as sshConfig from "./ssh-config.ts";
 import * as validate from "./validate.ts";
 
@@ -29,7 +30,7 @@ import ansibleBackupService from "../resources/tools/ansible/backup.service" wit
 import ansibleBackupFailureService from "../resources/tools/ansible/backup-failure.service" with { type: "text" };
 import ansibleBackupTimer from "../resources/tools/ansible/backup.timer" with { type: "text" };
 import dnsMainTf from "../resources/tools/dns/main.tf" with { type: "text" };
-import infrastructureMainTf from "../resources/tools/infrastructure/main.tf" with { type: "text" };
+import infrastructureVultrTf from "../resources/tools/infrastructure/vultr/main.tf" with { type: "text" };
 
 export const infrastructureTool = "netbird-infrastructure";
 export const dnsTool = "netbird-dns";
@@ -43,17 +44,31 @@ export function toolDir(opts: Opts, tool: string): string {
 
 const template = (name: string, content: string): Template => ({ name, content });
 
+// The compute templates this colour carries, one static text import per
+// provider directory (`infrastructure/<provider>/main.tf`), keyed by the
+// registry name. Providers are selected by directory, never by conditionals
+// inside one file; the rendered target is the same `main.tf` whichever
+// directory it came from.
+const infrastructureTemplates: Record<string, string> = {
+  vultr: infrastructureVultrTf,
+};
+
+export function infrastructureTemplate(opts: Opts): Template {
+  const provider = String(opts["provider-compute"]);
+  const content = infrastructureTemplates[provider];
+  if (content === undefined) throw new Error(`template not found: infrastructure/${provider}/main.tf`);
+  return template(`infrastructure/${provider}/main.tf`, content);
+}
+
 function spec(source: Template, target: string, data: Opts): Spec {
   return { template: source, target, data, opts: templateOpts };
 }
 
 const rawSpec = (target: string, content: string): Spec => contentSpec(target, content);
 
-export function cidrs(opts: Opts, key: string): string[] {
-  const value = opts[key];
-  const parts = Array.isArray(value) ? value : String(value ?? "").split(/[,\s]+/);
-  return parts.map((part) => String(part).trim()).filter((part) => part.length > 0);
-}
+// The source lists as validate parses them, so the template and the
+// validator can never disagree about what an entry is.
+export const cidrs = validate.cidrs;
 
 export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, string> | undefined {
   const mapping: Record<string, string> = Object.assign(
@@ -70,38 +85,40 @@ export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, st
 
 export const backendCredentialEnv = (opts: Opts) => credentialEnv(opts);
 
-export function fallbackParams(opts: Opts): Record<string, unknown> {
-  return { ip: "192.0.2.10", user: "root", sudoer: "root", name: validate.computeName(opts) };
-}
+// What `build` and `--dry-run` render in place of a compute output: the
+// documentation address, shaped like the selected provider's real `params` so
+// every later stage sees the same keys either way. ONCE's.
+export const fallbackParams = compute.fallbackParams;
 
-export function outputParams(result: Opts): Record<string, unknown> | undefined {
-  const params = (result["tofu/outputs"] as Record<string, unknown> | undefined)?.params;
-  return params && typeof params === "object" ? params as Record<string, unknown> : undefined;
-}
+// Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute output
+// carries no `ip`. ONCE's; `infrastructureStep` is what wires it.
+export const resolvedCompute = compute.resolvedCompute;
 
 // ---------------------------------------------------------------- compute
 
+// Template values for the compute stage. The name and the three source lists
+// are resolved here once, so a template interpolates values and never branches
+// on which provider it belongs to.
 export function infrastructureData(opts: Opts): Opts {
   return {
     ...opts,
     "ssh-keygen": validate.keygen(opts),
     "compute-name": validate.computeName(opts),
-    "ssh-sources-hcl": tofu.hclList(cidrs(opts, "vultr-ssh-sources")),
-    "http-sources-hcl": tofu.hclList(cidrs(opts, "vultr-http-sources")),
-    "stun-sources-hcl": tofu.hclList(cidrs(opts, "vultr-stun-sources")),
+    "ssh-sources-hcl": tofu.hclList(cidrs(opts, validate.computeKey(opts, "ssh-sources"))),
+    "http-sources-hcl": tofu.hclList(cidrs(opts, validate.computeKey(opts, "http-sources"))),
+    "stun-sources-hcl": tofu.hclList(cidrs(opts, validate.computeKey(opts, "stun-sources"))),
   };
 }
 
 export async function infrastructureStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, infrastructureTool);
-  const specs = [spec(template("infrastructure/main.tf", infrastructureMainTf),
-                      `${dir}/main.tf`, infrastructureData(opts))];
+  const specs = [spec(infrastructureTemplate(opts), `${dir}/main.tf`, infrastructureData(opts))];
   const result = await tofu.tofuWithSpec(opts, specs,
     { dir, env: credentialEnv(opts, "provider-compute") });
   if (failed(result)) return result;
   if (opts["red/event"] === "build") return { ...result, ...fallbackParams(opts) };
   if (opts["red/event"] === "delete") return result;
-  return { ...result, ...fallbackParams(opts), ...outputParams(result) };
+  return resolvedCompute(result, fallbackParams(opts), compute.outputParams(result));
 }
 
 // -------------------------------------------------------------------- dns

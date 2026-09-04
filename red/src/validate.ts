@@ -1,18 +1,55 @@
 import { parName } from "red/cli";
 import type { Opts } from "red/workflow";
-import { providers, registrableDomain } from "package-once-red";
+import { compute, providers, registrableDomain } from "package-once-red";
 import { onceSsh } from "./once.ts";
 
 export const profilePar = parName("profile");
 
-// Every key desired state must carry.
+// provider-compute -> what that choice implies.
 //
-// Two deliberate absences. `vultr-ssh-keys` selects opt-out mode by being
-// present, so requiring it would make every conforming keygen deployment
-// invalid. `vultr-name` is the Compute Name Standard's optional override: a
-// fresh colors.yml that omits it is complete and names the machine after the
-// profile. There is likewise no `package` key — §5 removes a key that can hold
-// exactly one value.
+// `required` are the non-secret keys that provider's template interpolates,
+// `secrets` the credentials it needs through COLORS_PAR_*, and `tofuEnv` the
+// subset OpenTofu reads from the process environment itself. Keeping the three
+// together is what stops a provider being validated against one set of keys and
+// run with another — a stage exporting a credential nobody checked for, or a
+// check demanding a key no template uses. The keys of this map are the
+// advertised providers; a provider without a template directory and a golden
+// is not advertised, and this package advertises one.
+//
+// Two keys the template reads are deliberately not required. `vultr-name` is
+// an optional override of the profile (Compute Name Standard), and
+// `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard). The
+// third source list, `vultr-stun-sources`, is this package's extension of the
+// standard's two: STUN is the one UDP port it publishes.
+export const computeProviders: compute.Registry = {
+  vultr: {
+    required: ["vultr-region", "vultr-plan", "vultr-os-id",
+               "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources"],
+    secrets: ["vultr-api-key"],
+    tofuEnv: { "vultr-api-key": "VULTR_API_KEY" },
+  },
+};
+
+// The provider a deployment created before this package recorded one in its
+// compute output must be running: the only one it ever offered.
+export const defaultComputeProvider = "vultr";
+
+// How this package describes itself to ONCE's `compute`, the Compute Provider
+// Standard's operations over a package-owned registry. The registry and the
+// default are the data above; `sources` names the firewall lists the template
+// reads — SSH must list at least one CIDR; an empty HTTP list means no public
+// HTTP and an empty STUN list no public STUN. The name rules are ONCE's.
+export const spec: compute.ComputeSpec = {
+  registry: computeProviders,
+  default: defaultComputeProvider,
+  sources: { nonEmpty: ["ssh-sources"], mayBeEmpty: ["http-sources", "stun-sources"] },
+};
+
+// Every key desired state must carry whichever provider is selected. The
+// provider-scoped keys come from `computeProviders`.
+//
+// There is no `package` key — Compute Name Standard §5 removes a key that can
+// hold exactly one value.
 export const required = [
   "profile", "workdir", "provider-compute", "provider-dns", "provider-backend",
   "compute-prevent-destroy",
@@ -27,8 +64,6 @@ export const required = [
   "netbird-backup-dir", "netbird-backup-r2-bucket", "netbird-backup-r2-endpoint",
   "netbird-backup-r2-region", "netbird-backup-oncalendar",
   "netbird-backup-retention-days",
-  "vultr-region", "vultr-plan", "vultr-os-id",
-  "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources",
   "r2-bucket", "r2-endpoint",
 ];
 
@@ -45,9 +80,9 @@ const emailRe = /^[^@\s]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9
 // ":latest", which is why the shape is required rather than the suffix denied.
 const imageRe = /^[^\s:@]+(?:\/[^\s:@]+)*(?::[^\s:@]+|@sha256:[0-9a-f]{64})$/;
 const absPathRe = /^\/[^\s]*$/;
+// The compose bridge subnet is a package key, not a firewall source, so its
+// shape is this package's to check.
 const cidrRe = /^(?:\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
-// Vultr labels accept letters, digits, dashes, underscores and periods.
-const vultrNameRe = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const clientIdRe = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/;
 
 export function missing(value: unknown): boolean {
@@ -55,27 +90,26 @@ export function missing(value: unknown): boolean {
     (typeof value === "string" && value.trim() === "");
 }
 
-// Absent, blank or REPLACE_ME all mean 'use the profile' (Compute Name
-// Standard §2: presence is the only switch).
-export function placeholder(value: unknown): boolean {
-  return missing(value) || String(value).trim() === "REPLACE_ME";
-}
+// `<provider>-<suffix>`: desired state names compute keys after the provider,
+// so the shared steps reach them through the selected provider rather than a
+// fixed prefix. ONCE's; named here so `tools` reads the same.
+export const computeKey = compute.computeKey;
 
-// What this deployment calls its machine. The one function that answers it —
-// every label, including the firewall's, derives from this and never from the
+// What this deployment calls its machine: `vultr-name` when present and not a
+// placeholder, else the profile (Compute Name Standard). ONCE's; every label,
+// including the firewall's, derives from this one answer and never from the
 // raw override key or a second copy of the profile (§3).
-export function computeName(opts: Opts): string {
-  const override = opts["vultr-name"];
-  return placeholder(override)
-    ? String(opts.profile ?? "")
-    : String(override).trim();
-}
+export const computeName = compute.computeName;
 
 // Whether this deployment owns its machine keypair. Delegates to ONCE, the
 // standard's reference implementation, so one rule decides it everywhere.
 export function keygen(opts: Opts): boolean {
   return onceSsh.keygen(opts);
 }
+
+// A source list as desired state or an overlay string carries it. ONCE's, so
+// the validator and the template can never disagree about what an entry is.
+export const cidrs = compute.cidrs;
 
 // A fixed address for Traefik on the compose network, derived from the subnet
 // rather than configured.
@@ -107,13 +141,15 @@ export function envErrors(env: Record<string, string | undefined>): string[] {
     : [];
 }
 
+// Every problem with desired state at once: the missing keys (this package's
+// and the selected provider's), the package's own checks, then the Compute
+// Provider Standard's — selection, the network contract over all three source
+// lists, and the provider rules including the resolved machine name — which
+// are ONCE's over `spec`.
 export function stateErrors(opts: Opts): string[] {
   const errors: string[] = [];
-  for (const key of required) {
+  for (const key of [...required, ...compute.requiredKeys(spec, opts)]) {
     if (missing(opts[key])) errors.push(`:${key} is required`);
-  }
-  if (opts["provider-compute"] !== "vultr") {
-    errors.push(":provider-compute must be vultr");
   }
   if (opts["provider-dns"] !== "cloudflare") {
     errors.push(":provider-dns must be cloudflare");
@@ -195,16 +231,7 @@ export function stateErrors(opts: Opts): string[] {
         (typeof retention === "number" && Number.isInteger(retention) && retention > 0))) {
     errors.push(":netbird-backup-retention-days must be a positive integer");
   }
-  const osId = opts["vultr-os-id"];
-  if (!(missing(osId) || (typeof osId === "number" && Number.isInteger(osId)))) {
-    errors.push(":vultr-os-id must be Vultr's numeric operating-system id");
-  }
-  // The override is validated against the provider's rules rather than
-  // passed through unread (Compute Name Standard §2).
-  if (!(placeholder(opts["vultr-name"]) ||
-        vultrNameRe.test(String(opts["vultr-name"]).trim()))) {
-    errors.push(":vultr-name must be letters, digits, dot, dash or underscore");
-  }
+  errors.push(...compute.stateErrors(spec, opts));
   return errors;
 }
 
@@ -212,8 +239,11 @@ export function backendSecrets(opts: Opts): string[] {
   return providers["provider-backend"]?.[String(opts["provider-backend"])]?.secrets ?? [];
 }
 
-// What talking to the providers needs, on any real event.
-export const providerSecrets = ["vultr-api-key", "cloudflare-api-token"];
+// What talking to the providers needs, on any real event: the selected compute
+// provider's credential, from the registry, and Cloudflare's.
+export function providerSecrets(opts: Opts): string[] {
+  return [...compute.secrets(spec, opts), "cloudflare-api-token"];
+}
 
 // What converging the machine needs, and therefore only a create.
 //
@@ -245,7 +275,7 @@ export function secretErrors(opts: Opts, event: string | undefined): string[] {
          "netbird-backup-r2-access-key-id",
          "netbird-backup-r2-secret-access-key"]
       : [];
-  const keys = [...new Set([...providerSecrets, ...eventKeys, ...backendSecrets(opts)])];
+  const keys = [...new Set([...providerSecrets(opts), ...eventKeys, ...backendSecrets(opts)])];
   return keys.filter((key) => missing(opts[key]))
     .map((key) => `required credential is not set: ${parName(key)}`);
 }
@@ -253,7 +283,7 @@ export function secretErrors(opts: Opts, event: string | undefined): string[] {
 export function tofuEnv(opts: Opts, slot: string): Record<string, string> {
   switch (slot) {
     case "provider-compute":
-      return { "vultr-api-key": "VULTR_API_KEY" };
+      return compute.tofuEnv(spec, opts);
     case "provider-dns":
       return { "cloudflare-api-token": "CLOUDFLARE_API_TOKEN" };
     case "provider-backend":

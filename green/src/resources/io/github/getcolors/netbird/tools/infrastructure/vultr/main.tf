@@ -115,6 +115,7 @@ resource "vultr_instance" "netbird" {
 
 output "params" {
   value = {
+    provider = "vultr"
     ip     = vultr_instance.netbird.main_ip
     user   = "root"
     sudoer = "root"

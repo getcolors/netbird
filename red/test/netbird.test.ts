@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { Opts } from "red/workflow";
+import { StepError, type Opts } from "red/workflow";
 import * as ssh from "../src/ssh.ts";
 import * as sshConfig from "../src/ssh-config.ts";
 import * as tools from "../src/tools.ts";
@@ -48,6 +48,65 @@ describe("validate", () => {
     expect(validate.stateErrors(optout())).toEqual([]);
   });
 
+  // --- the spec handed to ONCE
+
+  test("the spec carries this package's registry, sources and default", () => {
+    // The operations are ONCE's; this is the data they run over. A colour
+    // whose registry, sources or default drifts fails here, in that colour.
+    expect(Object.keys(validate.spec.registry)).toEqual(["vultr"]);
+    expect(validate.spec.registry).toBe(validate.computeProviders);
+    expect(validate.spec.registry.vultr).toEqual({
+      required: ["vultr-region", "vultr-plan", "vultr-os-id",
+                 "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources"],
+      secrets: ["vultr-api-key"],
+      tofuEnv: { "vultr-api-key": "VULTR_API_KEY" },
+    });
+    // STUN is the third list, this package's extension of the standard's two.
+    expect(validate.spec.sources).toEqual({ nonEmpty: ["ssh-sources"], mayBeEmpty: ["http-sources", "stun-sources"] });
+    expect(validate.spec.default).toBe("vultr");
+    expect(validate.spec.default).toBe(validate.defaultComputeProvider);
+    // The name rules are ONCE's.
+    expect(validate.spec.nameRules).toBeUndefined();
+  });
+
+  // --- the compute-provider registry
+
+  test("an unsupported provider names the advertised ones", () => {
+    expect(validate.stateErrors(fixture({ "provider-compute": "digitalocean" })))
+      .toContain(":provider-compute must be one of vultr");
+  });
+
+  test("required keys, secrets and the tofu env follow the selected provider", () => {
+    expect(validate.stateErrors(fixture({ "vultr-plan": null }))).toContain(":vultr-plan is required");
+    expect(validate.stateErrors(fixture({ "vultr-stun-sources": null })))
+      .toContain(":vultr-stun-sources is required");
+    // Another provider's keys are neither required nor refused.
+    expect(validate.stateErrors(fixture({ "digitalocean-region": "ams3" }))).toEqual([]);
+    expect(validate.tofuEnv(fixture(), "provider-compute")).toEqual({ "vultr-api-key": "VULTR_API_KEY" });
+    expect(validate.tofuEnv(fixture({ "provider-compute": "digitalocean" }), "provider-compute")).toEqual({});
+  });
+
+  // --- the network contract (Compute Provider Standard §5)
+
+  test("ssh sources must not be empty; no public HTTP or STUN is fine", () => {
+    // ONCE's check, wired through `spec`: a machine nobody can reach is not a
+    // deployment, while no public HTTP and no public STUN are both legitimate.
+    expect(validate.stateErrors(fixture({ "vultr-ssh-sources": [] })))
+      .toContain(":vultr-ssh-sources must list at least one CIDR");
+    expect(validate.stateErrors(fixture({ "vultr-ssh-sources": " , " })))
+      .toContain(":vultr-ssh-sources must list at least one CIDR");
+    expect(validate.stateErrors(fixture({ "vultr-http-sources": [] }))).toEqual([]);
+    expect(validate.stateErrors(fixture({ "vultr-stun-sources": [] }))).toEqual([]);
+  });
+
+  test("malformed sources are refused before any provider call", () => {
+    expect(validate.stateErrors(fixture({ "vultr-http-sources": ["0.0.0.0/0", "10.0.0.0"] })))
+      .toContain(':vultr-http-sources entry "10.0.0.0" is not an IPv4 or IPv6 CIDR');
+    expect(validate.stateErrors(fixture({ "vultr-stun-sources": "office.example.com/32" })))
+      .toContain(':vultr-stun-sources entry "office.example.com/32" is not an IPv4 or IPv6 CIDR');
+    expect(validate.stateErrors(fixture({ "vultr-ssh-sources": ["2001:db8::/32", "203.0.113.0/24"] }))).toEqual([]);
+  });
+
   test("the machine key and the name key are not required", () => {
     // The standard makes absence meaningful: requiring vultr-ssh-keys would
     // make every conforming keygen deployment invalid, and a fresh colors.yml
@@ -86,7 +145,7 @@ describe("validate", () => {
       "netbird-host": "bad",
       "netbird-server-image": "floating",
       "netbird-letsencrypt-email": "not-an-email",
-      "provider-dns": "other", "provider-compute": "digitalocean",
+      "provider-dns": "other",
       "netbird-backup-retention-days": 0,
       "netbird-backup-dir": "relative/path",
       "netbird-stun-port": 70000,
@@ -95,7 +154,7 @@ describe("validate", () => {
     }));
     expect(errors.length).toBeGreaterThanOrEqual(9);
     for (const part of ["host", "image", "letsencrypt-email", "provider-dns",
-                        "provider-compute", "os-id", "retention-days",
+                        "os-id", "retention-days",
                         "backup-dir", "stun-port", "docker-subnet"]) {
       expect(errors.some((e) => e.includes(part))).toBe(true);
     }
@@ -541,31 +600,138 @@ describe("ssh-config", () => {
 // --- workflow ----------------------------------------------------------------
 
 describe("workflow", () => {
-  test("build and dry-run need no credentials and never touch ~/.ssh", async () => {
+  // The compute state is read once per run, through the injectable reader,
+  // on a real create or delete. Every lifecycle test stubs it: undefined is a
+  // readable state holding no compute, a map is a recorded `params`, and a
+  // throw is a backend that cannot be read.
+  const start = (opts: Opts, state: Record<string, unknown> | undefined) =>
+    workflow.startStep(opts, {}, async () => state);
+  // The shape `red/tofu` throws: the SDK's StepError. Only that is an
+  // unreadable backend; anything else propagates as a defect.
+  const startUnreadable = (opts: Opts) =>
+    workflow.startStep(opts, {}, async () => { throw new StepError("tofu output failed: no backend"); });
+  // What a real delete asks for: the providers and the final backup's set.
+  const credentials = { "vultr-api-key": "v", "cloudflare-api-token": "c",
+    "netbird-backup-recovery-key": "k",
+    "netbird-backup-r2-access-key-id": "a", "netbird-backup-r2-secret-access-key": "s" };
+
+  test("build and dry-run need no credentials and never touch ~/.ssh or the state", async () => {
     // The standard forbids reading, creating, or requiring anything under
     // ~/.ssh on a build or dry-run: they render from desired state alone.
-    // A poisoned config proves nothing in the build path reads it.
+    // A poisoned config proves nothing in the build path reads it, and a
+    // throwing reader proves nothing on these paths reads the backend.
     write(join(home, ".ssh", "config"), "ServerAliveInterval 60\nHost netbird-fixture\n");
     for (const overrides of [{ "red/event": "build" },
-                             { "red/event": "create", "red/dry-run": true }]) {
-      const result = await workflow.startStep(fixture(overrides), {});
+                             { "red/event": "create", "red/dry-run": true },
+                             { "red/event": "delete", "red/dry-run": true }]) {
+      const result = await startUnreadable(fixture(overrides));
       expect(result["red/exit"]).toBe(0);
       expect(String(result["ssh-public-key-path"])).toStartWith("/home/build-placeholder");
     }
   });
 
   test("a real create requires credentials", async () => {
-    const result = await workflow.startStep(fixture({ "red/event": "create" }), {});
+    const result = await start(fixture({ "red/event": "create" }), undefined);
     expect(result["red/exit"]).toBe(2);
     expect(String(result["red/err"])).toContain("COLORS_PAR_VULTR_API_KEY");
     expect(String(result["red/err"])).toContain("COLORS_PAR_CLOUDFLARE_API_TOKEN");
     expect(String(result["red/err"])).toContain("COLORS_PAR_NETBIRD_BOOTSTRAP_PASSWORD");
   });
 
+  test("a real delete asks for the providers and the backup set only", async () => {
+    // The thunk handed to ONCE carries the event: a delete still never asks
+    // for an account password.
+    const result = await start(fixture({ "red/event": "delete", "compute-prevent-destroy": false }), undefined);
+    expect(result["red/exit"]).toBe(2);
+    expect(String(result["red/err"])).toContain("COLORS_PAR_VULTR_API_KEY");
+    expect(String(result["red/err"])).toContain("COLORS_PAR_NETBIRD_BACKUP_RECOVERY_KEY");
+    expect(String(result["red/err"])).not.toContain("BOOTSTRAP_PASSWORD");
+  });
+
   test("delete is protected", async () => {
-    const result = await workflow.startStep(fixture({ "red/event": "delete" }), {});
+    const result = await start(fixture({ "red/event": "delete" }), undefined);
     expect(result["red/exit"]).toBe(2);
     expect(String(result["red/err"])).toContain("COMPUTE_PREVENT_DESTROY");
+  });
+
+  // --- provider switching is a rebuild, never an apply
+
+  test("a provider switch is refused on create and delete", async () => {
+    for (const event of ["create", "delete"]) {
+      const result = await start(fixture({ "red/event": event, "compute-prevent-destroy": false }),
+        { provider: "digitalocean", ip: "203.0.113.9" });
+      expect(result["red/exit"]).toBe(2);
+      expect(String(result["red/err"]))
+        .toContain("state holds a digitalocean machine; set provider-compute back to digitalocean and delete first");
+      // The validator order is the thing under test: the actionable error,
+      // not a missing token for the provider that was just selected.
+      expect(String(result["red/err"])).not.toContain("required credential is not set");
+    }
+  });
+
+  test("legacy state is accepted on the default provider", async () => {
+    // A deployment created before this package recorded a provider carries
+    // no `params.provider`; it is a Vultr machine, and Vultr is selected.
+    for (const event of ["create", "delete"]) {
+      const result = await start(fixture({ "red/event": event, "compute-prevent-destroy": false }),
+        { ip: "203.0.113.9" });
+      expect(String(result["red/err"])).not.toContain("state holds");
+      expect(String(result["red/err"])).toContain("required credential is not set");
+    }
+  });
+
+  test("a matching provider passes to the credentials", async () => {
+    const result = await start(fixture({ "red/event": "create" }), { provider: "vultr", ip: "203.0.113.9" });
+    expect(result["red/exit"]).toBe(2);
+    expect(String(result["red/err"])).not.toContain("state holds");
+    expect(String(result["red/err"])).toContain("COLORS_PAR_VULTR_API_KEY");
+  });
+
+  test("an unreadable backend counts as no state on create", async () => {
+    // A fresh clone has no readable state and must still be able to create.
+    const result = await startUnreadable(fixture({ "red/event": "create" }));
+    expect(result["red/exit"]).toBe(2);
+    expect(String(result["red/err"])).not.toContain("could not read");
+    expect(String(result["red/err"])).not.toContain("state holds");
+    expect(String(result["red/err"])).toContain("COLORS_PAR_VULTR_API_KEY");
+  });
+
+  test("a real create on a fresh work directory reports the credentials, not a crash", async () => {
+    // No reader stub: the real `stateOutput` runs against a work directory
+    // that holds no stage yet, as a fresh clone's does. The SDK's output read
+    // throws its StepError there, which ONCE's `readState` counts as an
+    // unreadable state, so the create reports its credentials.
+    const work = mkdtempSync(join(tmpdir(), "netbird-red-fresh"));
+    try {
+      const result = await workflow.startStep(fixture({ workdir: work, "red/event": "create" }), {});
+      expect(result["red/exit"]).toBe(2);
+      expect(String(result["red/err"])).toContain("COLORS_PAR_VULTR_API_KEY");
+      expect(String(result["red/err"])).not.toContain("could not read");
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable backend fails a real delete closed", async () => {
+    // Swallowing it is how a teardown ends up converging against 192.0.2.10.
+    const result = await startUnreadable(fixture({ ...credentials, "red/event": "delete",
+      "compute-prevent-destroy": false }));
+    expect(result["red/exit"]).toBe(1);
+    expect(String(result["red/err"])).toContain("could not read the infrastructure state for the delete cleanup");
+    expect(String(result["red/err"])).toContain("no backend");
+  });
+
+  test("a real delete adopts the recorded address", async () => {
+    const adopted = await start(fixture({ ...credentials, "red/event": "delete", "compute-prevent-destroy": false }),
+      { provider: "vultr", ip: "203.0.113.9", user: "root" });
+    expect(adopted["red/exit"]).toBe(0);
+    expect(adopted.ip).toBe("203.0.113.9");
+    // A readable state without compute leaves the address unset, and the
+    // cleanup step skips itself.
+    const empty = await start(fixture({ ...credentials, "red/event": "delete", "compute-prevent-destroy": false }),
+      undefined);
+    expect(empty["red/exit"]).toBe(0);
+    expect(empty.ip).toBeUndefined();
   });
 
   test("the create graph orders the stack", () => {

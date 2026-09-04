@@ -10,20 +10,58 @@ from __future__ import annotations
 import re
 
 from blue.cli import par_name
+from package_once_blue import compute as once_compute
 from package_once_blue import ssh as once_ssh
 from package_once_blue.utils import registrable_domain
 from package_once_blue.validate import providers as once_providers
 
 profile_par = par_name("profile")
 
-# Every key desired state must carry.
+# provider-compute -> what that choice implies.
 #
-# Two deliberate absences. `vultr-ssh-keys` selects opt-out mode by being
-# present, so requiring it would make every conforming keygen deployment
-# invalid. `vultr-name` is the Compute Name Standard's optional override: a
-# fresh colors.yml that omits it is complete and names the machine after the
-# profile. There is likewise no `package` key — §5 removes a key that can hold
-# exactly one value.
+# `required` are the non-secret keys that provider's template interpolates,
+# `secrets` the credentials it needs through COLORS_PAR_*, and `tofu-env` the
+# subset OpenTofu reads from the process environment itself. Keeping the three
+# together is what stops a provider being validated against one set of keys and
+# run with another — a stage exporting a credential nobody checked for, or a
+# check demanding a key no template uses. The keys of this map are the
+# advertised providers; a provider without a template directory and a golden
+# is not advertised, and this package advertises one.
+#
+# Two keys the template reads are deliberately not required. `vultr-name` is
+# an optional override of the profile (Compute Name Standard), and
+# `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard). The
+# third source list, `vultr-stun-sources`, is this package's extension of the
+# standard's two: STUN is the one UDP port it publishes.
+compute_providers = {
+    "vultr": {
+        "required": ["vultr-region", "vultr-plan", "vultr-os-id",
+                     "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources"],
+        "secrets": ["vultr-api-key"],
+        "tofu-env": {"vultr-api-key": "VULTR_API_KEY"},
+    },
+}
+
+# The provider a deployment created before this package recorded one in its
+# compute output must be running: the only one it ever offered.
+default_compute_provider = "vultr"
+
+# How this package describes itself to ONCE's `compute`, the Compute Provider
+# Standard's operations over a package-owned registry. The registry and the
+# default are the data above; `sources` names the firewall lists the template
+# reads — SSH must list at least one CIDR; an empty HTTP list means no public
+# HTTP and an empty STUN list no public STUN. The name rules are ONCE's.
+spec: once_compute.ComputeSpec = {
+    "registry": compute_providers,
+    "default": default_compute_provider,
+    "sources": {"non_empty": ["ssh-sources"], "may_be_empty": ["http-sources", "stun-sources"]},
+}
+
+# Every key desired state must carry whichever provider is selected. The
+# provider-scoped keys come from `compute_providers`.
+#
+# There is no `package` key — Compute Name Standard §5 removes a key that can
+# hold exactly one value.
 required = [
     "profile", "workdir", "provider-compute", "provider-dns", "provider-backend",
     "compute-prevent-destroy",
@@ -38,8 +76,6 @@ required = [
     "netbird-backup-dir", "netbird-backup-r2-bucket", "netbird-backup-r2-endpoint",
     "netbird-backup-r2-region", "netbird-backup-oncalendar",
     "netbird-backup-retention-days",
-    "vultr-region", "vultr-plan", "vultr-os-id",
-    "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources",
     "r2-bucket", "r2-endpoint",
 ]
 
@@ -56,9 +92,9 @@ email_re = re.compile(r"[^@\s]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[
 # ":latest", which is why the shape is required rather than the suffix denied.
 image_re = re.compile(r"[^\s:@]+(?:/[^\s:@]+)*(?::[^\s:@]+|@sha256:[0-9a-f]{64})")
 abs_path_re = re.compile(r"/[^\s]*")
+# The compose bridge subnet is a package key, not a firewall source, so its
+# shape is this package's to check.
 cidr_re = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}")
-# Vultr labels accept letters, digits, dashes, underscores and periods.
-vultr_name_re = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,62}")
 client_id_re = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
 
 
@@ -75,24 +111,27 @@ def missing(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def placeholder(value) -> bool:
-    """Absent, blank or REPLACE_ME all mean 'use the profile' (Compute Name
-    Standard §2: presence is the only switch)."""
-    return missing(value) or _s(value).strip() == "REPLACE_ME"
+# `<provider>-<suffix>`: desired state names compute keys after the provider,
+# so the shared steps reach them through the selected provider rather than a
+# fixed prefix. ONCE's; named here so `tools` reads the same.
+compute_key = once_compute.compute_key
 
-
-def compute_name(opts: dict) -> str:
-    """What this deployment calls its machine. The one function that answers it
-    — every label, including the firewall's, derives from this and never from
-    the raw override key or a second copy of the profile (§3)."""
-    override = opts.get("vultr-name")
-    return _s(opts.get("profile")) if placeholder(override) else _s(override).strip()
+# What this deployment calls its machine: `vultr-name` when present and not a
+# placeholder, else the profile (Compute Name Standard). ONCE's; every label,
+# including the firewall's, derives from this one answer and never from the
+# raw override key or a second copy of the profile (§3).
+compute_name = once_compute.compute_name
 
 
 def keygen(opts: dict) -> bool:
     """Whether this deployment owns its machine keypair. Delegates to ONCE, the
     standard's reference implementation, so one rule decides it everywhere."""
     return once_ssh.keygen(opts)
+
+
+# A source list as desired state or an overlay string carries it. ONCE's, so
+# the validator and the template can never disagree about what an entry is.
+cidrs = once_compute.cidrs
 
 
 def traefik_ip(opts: dict) -> str | None:
@@ -128,10 +167,15 @@ def env_errors(env: dict) -> list[str]:
 
 
 def state_errors(opts: dict) -> list[str]:
+    """Every problem with desired state at once: the missing keys (this
+    package's and the selected provider's), the package's own checks, then the
+    Compute Provider Standard's — selection, the network contract over all
+    three source lists, and the provider rules including the resolved machine
+    name — which are ONCE's over `spec`."""
     errors: list[str] = []
-    errors += [f":{k} is required" for k in required if missing(opts.get(k))]
-    if opts.get("provider-compute") != "vultr":
-        errors.append(":provider-compute must be vultr")
+    errors += [f":{k} is required"
+               for k in [*required, *once_compute.required_keys(spec, opts)]
+               if missing(opts.get(k))]
     if opts.get("provider-dns") != "cloudflare":
         errors.append(":provider-dns must be cloudflare")
     if opts.get("provider-backend") not in ("local", "s3", "r2"):
@@ -194,14 +238,7 @@ def state_errors(opts: dict) -> list[str]:
     if not (missing(retention)
             or (isinstance(retention, int) and not isinstance(retention, bool) and retention > 0)):
         errors.append(":netbird-backup-retention-days must be a positive integer")
-    os_id = opts.get("vultr-os-id")
-    if not (missing(os_id) or (isinstance(os_id, int) and not isinstance(os_id, bool))):
-        errors.append(":vultr-os-id must be Vultr's numeric operating-system id")
-    # The override is validated against the provider's rules rather than
-    # passed through unread (Compute Name Standard §2).
-    if not (placeholder(opts.get("vultr-name"))
-            or vultr_name_re.fullmatch(_s(opts.get("vultr-name")).strip())):
-        errors.append(":vultr-name must be letters, digits, dot, dash or underscore")
+    errors += once_compute.state_errors(spec, opts)
     return errors
 
 
@@ -210,8 +247,11 @@ def backend_secrets(opts: dict) -> list[str]:
     return entry.get("secrets", [])
 
 
-# What talking to the providers needs, on any real event.
-provider_secrets = ["vultr-api-key", "cloudflare-api-token"]
+def provider_secrets(opts: dict) -> list[str]:
+    """What talking to the providers needs, on any real event: the selected
+    compute provider's credential, from the registry, and Cloudflare's."""
+    return [*once_compute.secrets(spec, opts), "cloudflare-api-token"]
+
 
 # What converging the machine needs, and therefore only a create.
 #
@@ -243,14 +283,14 @@ def secret_errors(opts: dict, event: str | None) -> list[str]:
                    "netbird-backup-r2-access-key-id",
                    "netbird-backup-r2-secret-access-key"],
     }.get(event, [])
-    keys = [*provider_secrets, *per_event, *backend_secrets(opts)]
+    keys = [*provider_secrets(opts), *per_event, *backend_secrets(opts)]
     return [f"required credential is not set: {par_name(k)}"
             for k in dict.fromkeys(keys) if missing(opts.get(k))]
 
 
 def tofu_env(opts: dict, slot: str) -> dict[str, str]:
     if slot == "provider-compute":
-        return {"vultr-api-key": "VULTR_API_KEY"}
+        return once_compute.tofu_env(spec, opts)
     if slot == "provider-dns":
         return {"cloudflare-api-token": "CLOUDFLARE_API_TOKEN"}
     if slot == "provider-backend":

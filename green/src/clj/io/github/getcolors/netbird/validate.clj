@@ -1,21 +1,57 @@
 (ns io.github.getcolors.netbird.validate
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
+            [io.github.getcolors.once.compute :as compute]
             [io.github.getcolors.once.ssh :as once-ssh]
             [io.github.getcolors.once.utils :as once-utils]
             [io.github.getcolors.once.validate :as once-validate]))
 
 (def profile-par (green-cli/par-name :profile))
 
-(def required
-  "Every key desired state must carry.
+(def compute-providers
+  "provider-compute -> what that choice implies.
 
-  Two deliberate absences. `vultr-ssh-keys` selects opt-out mode by being
-  present, so requiring it would make every conforming keygen deployment
-  invalid. `vultr-name` is the Compute Name Standard's optional override: a
-  fresh colors.yml that omits it is complete and names the machine after the
-  profile. There is likewise no `package` key — §5 removes a key that can hold
-  exactly one value."
+  `:required` are the non-secret keys that provider's template interpolates,
+  `:secrets` the credentials it needs through COLORS_PAR_*, and `:tofu-env` the
+  subset OpenTofu reads from the process environment itself. Keeping the three
+  together is what stops a provider being validated against one set of keys and
+  run with another — a stage exporting a credential nobody checked for, or a
+  check demanding a key no template uses. The keys of this map are the
+  advertised providers; a provider without a template directory and a golden
+  is not advertised, and this package advertises one.
+
+  Two keys the template reads are deliberately not required. `vultr-name` is
+  an optional override of the profile (Compute Name Standard), and
+  `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard). The
+  third source list, `vultr-stun-sources`, is this package's extension of the
+  standard's two: STUN is the one UDP port it publishes."
+  {"vultr"
+   {:required [:vultr-region :vultr-plan :vultr-os-id
+               :vultr-ssh-sources :vultr-http-sources :vultr-stun-sources]
+    :secrets [:vultr-api-key]
+    :tofu-env {:vultr-api-key "VULTR_API_KEY"}}})
+
+(def default-compute-provider
+  "The provider a deployment created before this package recorded one in its
+  compute output must be running: the only one it ever offered."
+  "vultr")
+
+(def spec
+  "How this package describes itself to ONCE's `compute`, the Compute Provider
+  Standard's operations over a package-owned registry. The registry and the
+  default are the data above; `:sources` names the firewall lists the template
+  reads — SSH must list at least one CIDR; an empty HTTP list means no public
+  HTTP and an empty STUN list no public STUN. The name rules are ONCE's."
+  {:registry compute-providers
+   :default default-compute-provider
+   :sources {:non-empty ["ssh-sources"] :may-be-empty ["http-sources" "stun-sources"]}})
+
+(def required
+  "Every key desired state must carry whichever provider is selected. The
+  provider-scoped keys come from `compute-providers`.
+
+  There is no `package` key — Compute Name Standard §5 removes a key that can
+  hold exactly one value."
   [:profile :workdir :provider-compute :provider-dns :provider-backend
    :compute-prevent-destroy
    :netbird-host :netbird-authentik-host :netbird-letsencrypt-email
@@ -29,8 +65,6 @@
    :netbird-backup-dir :netbird-backup-r2-bucket :netbird-backup-r2-endpoint
    :netbird-backup-r2-region :netbird-backup-oncalendar
    :netbird-backup-retention-days
-   :vultr-region :vultr-plan :vultr-os-id
-   :vultr-ssh-sources :vultr-http-sources :vultr-stun-sources
    :r2-bucket :r2-endpoint])
 
 (def image-keys
@@ -45,32 +79,36 @@
 ;; ":latest", which is why the shape is required rather than the suffix denied.
 (def image-re #"^[^\s:@]+(?:/[^\s:@]+)*(?::[^\s:@]+|@sha256:[0-9a-f]{64})$")
 (def abs-path-re #"^/[^\s]*$")
+;; The compose bridge subnet is a package key, not a firewall source, so its
+;; shape is this package's to check.
 (def cidr-re #"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$")
-;; Vultr labels accept letters, digits, dashes, underscores and periods.
-(def vultr-name-re #"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 (def client-id-re #"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 
 (defn missing? [x] (or (nil? x) (and (string? x) (str/blank? x))))
 
-(defn placeholder?
-  "Absent, blank or REPLACE_ME all mean 'use the profile' (Compute Name
-  Standard §2: presence is the only switch)."
-  [v]
-  (or (missing? v) (= "REPLACE_ME" (str/trim (str v)))))
+(def compute-key
+  "`:<provider>-<suffix>`: desired state names compute keys after the
+  provider, so the shared steps reach them through the selected provider
+  rather than a fixed prefix. ONCE's; named here so `tools` reads the same."
+  compute/key)
 
-(defn compute-name
-  "What this deployment calls its machine. The one function that answers it —
-  every label, including the firewall's, derives from this and never from the
+(def compute-name
+  "What this deployment calls its machine: `vultr-name` when present and not a
+  placeholder, else the profile (Compute Name Standard). ONCE's; every label,
+  including the firewall's, derives from this one answer and never from the
   raw override key or a second copy of the profile (§3)."
-  [opts]
-  (let [override (:vultr-name opts)]
-    (if (placeholder? override) (str (:profile opts)) (str/trim (str override)))))
+  compute/name)
 
 (defn keygen?
   "Whether this deployment owns its machine keypair. Delegates to ONCE, the
   standard's reference implementation, so one rule decides it everywhere."
   [opts]
   (once-ssh/keygen? opts))
+
+(def cidrs
+  "A source list as desired state or an overlay string carries it. ONCE's, so
+  the validator and the template can never disagree about what an entry is."
+  compute/cidrs)
 
 (defn traefik-ip
   "A fixed address for Traefik on the compose network, derived from the subnet
@@ -101,12 +139,18 @@
   (when (not-empty (str (get env profile-par)))
     [(str profile-par " is set; profile must come from colors.yml only")]))
 
-(defn state-errors [opts]
+(defn state-errors
+  "Every problem with desired state at once: the missing keys (this package's
+  and the selected provider's), the package's own checks, then the Compute
+  Provider Standard's — selection, the network contract over all three source
+  lists, and the provider rules including the resolved machine name — which
+  are ONCE's over `spec`."
+  [opts]
   (vec
    (concat
-    (for [k required :when (missing? (get opts k))] (str k " is required"))
-    (when-not (= "vultr" (:provider-compute opts))
-      [":provider-compute must be vultr"])
+    (for [k (concat required (compute/required-keys spec opts))
+          :when (missing? (get opts k))]
+      (str k " is required"))
     (when-not (= "cloudflare" (:provider-dns opts))
       [":provider-dns must be cloudflare"])
     (when-not (contains? #{"local" "s3" "r2"} (:provider-backend opts))
@@ -169,21 +213,17 @@
                   (and (integer? (:netbird-backup-retention-days opts))
                        (pos? (:netbird-backup-retention-days opts))))
       [":netbird-backup-retention-days must be a positive integer"])
-    (when-not (or (missing? (:vultr-os-id opts)) (integer? (:vultr-os-id opts)))
-      [":vultr-os-id must be Vultr's numeric operating-system id"])
-    ;; The override is validated against the provider's rules rather than
-    ;; passed through unread (Compute Name Standard §2).
-    (when-not (or (placeholder? (:vultr-name opts))
-                  (re-matches vultr-name-re (str/trim (str (:vultr-name opts)))))
-      [":vultr-name must be letters, digits, dot, dash or underscore"]))))
+    (compute/state-errors spec opts))))
 
 (defn backend-secrets [opts]
   (:secrets (get-in once-validate/providers
                     [:provider-backend (:provider-backend opts)])))
 
-(def provider-secrets
-  "What talking to the providers needs, on any real event."
-  [:vultr-api-key :cloudflare-api-token])
+(defn provider-secrets
+  "What talking to the providers needs, on any real event: the selected
+  compute provider's credential, from the registry, and Cloudflare's."
+  [opts]
+  (concat (compute/secrets spec opts) [:cloudflare-api-token]))
 
 (def application-secrets
   "What converging the machine needs, and therefore only a create.
@@ -208,7 +248,7 @@
   demanding the owner's password to destroy a machine would just be a lock on
   the exit."
   [opts event]
-  (let [keys (concat provider-secrets
+  (let [keys (concat (provider-secrets opts)
                      (case event
                        :create application-secrets
                        :delete [:netbird-backup-recovery-key
@@ -221,7 +261,7 @@
 
 (defn tofu-env [opts slot]
   (case slot
-    :provider-compute {:vultr-api-key "VULTR_API_KEY"}
+    :provider-compute (compute/tofu-env spec opts)
     :provider-dns {:cloudflare-api-token "CLOUDFLARE_API_TOKEN"}
     :provider-backend (:tofu-env (get-in once-validate/providers
                                          [:provider-backend (:provider-backend opts)]) {})

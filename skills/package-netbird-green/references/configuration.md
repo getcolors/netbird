@@ -14,7 +14,7 @@ point one deployment at another's. The package refuses to run when it is set.
 |---|---|
 | `profile` | This deployment's identity. Keys remote state as `<profile>/<stage>.tfstate`, names the machine, its firewall, the SSH keypair and the `~/.ssh/config` alias. |
 | `workdir` | Where generated output lands. Conventionally `.colors`. |
-| `provider-compute` | Must be `vultr`. |
+| `provider-compute` | `vultr`, the one advertised provider. Selects the compute template (`infrastructure/vultr/`) and which provider-scoped keys below are read; keys of another provider are ignored, never refused. Switching on a profile that already holds a machine is refused — see below. |
 | `provider-dns` | Must be `cloudflare`. |
 | `provider-backend` | `local`, `s3` or `r2`. |
 | `compute-prevent-destroy` | Keep `true` in committed state. Destruction needs `COLORS_PAR_COMPUTE_PREVENT_DESTROY=false` for one run. |
@@ -66,14 +66,39 @@ release train.
 | `vultr-region` | Region code, e.g. `ams`. |
 | `vultr-plan` | Plan id. `vc2-4c-8gb` or larger: Authentik alone wants 2 vCPU and 2 GB. |
 | `vultr-os-id` | Vultr's numeric OS id. |
-| `vultr-ssh-sources` | CIDRs allowed to reach 22. |
-| `vultr-http-sources` | CIDRs allowed to reach 80 and 443. |
-| `vultr-stun-sources` | CIDRs allowed to reach the STUN port. |
+| `vultr-ssh-sources` | CIDRs allowed to reach 22. Must list at least one: an empty list renders a machine no one can reach and is refused. |
+| `vultr-http-sources` | CIDRs allowed to reach 80 and 443. May be empty, meaning no public HTTP. |
+| `vultr-stun-sources` | CIDRs allowed to reach the STUN UDP port (`netbird-stun-port`). May be empty, meaning no public STUN. This third list is this package's extension of the standard's two. |
 | `vultr-name` | **Optional.** Absent, blank or `REPLACE_ME` names the machine after the profile. Set it only for an account whose naming policy the profile cannot satisfy. |
 | `vultr-ssh-keys` | **Optional.** Absent selects keygen mode, where the package generates and owns `~/.ssh/<profile>`. Present switches to opt-out mode, where the package touches no key material at all. |
 
+Every entry of the three source lists must be a syntactically valid IPv4 or
+IPv6 CIDR (`203.0.113.0/24`, `2001:db8::/32`); a malformed entry is refused
+with `:vultr-<list>-sources entry "<entry>" is not an IPv4 or IPv6 CIDR`
+before any provider call, rather than by OpenTofu once the apply reaches
+Vultr. The provider firewall is the load-bearing network layer: it admits 22,
+80, 443 and the STUN port from those lists and nothing else, and the playbook
+manages no host firewall for them.
+
 There is no `package` key: a key that can hold exactly one value carries no
 information.
+
+### Switching providers
+
+Every provider shares one state key, `<profile>/netbird-infrastructure.tfstate`,
+so a changed `provider-compute` on a profile whose state already holds a
+machine would plan a cross-provider replacement in one apply. Both `create`
+and `delete` read the recorded compute output first — the read needs only the
+backend credentials — and refuse with
+`state holds a <recorded> machine; set provider-compute back to <recorded> and delete first`
+before validating any provider credential. Set it back, `delete`, then switch
+and `create`. A deployment created before this package recorded its provider
+is treated as a Vultr machine. On a `delete`, a backend that cannot be read is
+an error (`could not read the infrastructure state for the delete cleanup`),
+never an empty state; on a `create` it counts as no state, because a fresh
+clone has none. A real create whose compute output carries no address refuses
+with `compute produced no ip output` rather than converge against the
+documentation address `192.0.2.10`.
 
 ## State backend
 

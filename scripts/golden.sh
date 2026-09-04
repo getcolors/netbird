@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# NetBird is a single colour, so there is no parity harness. This is the
-# regression net in its place: render every fixture and diff against committed
-# output.
+# Green's regression net against the committed goldens: render every fixture
+# and diff against committed output. scripts/parity.sh is the net across
+# colours — it renders the same fixtures through red and blue and diffs the
+# trees byte for byte — so a change lands here first and there second.
 #
 # Two fixtures, because the SSH Keypair Standard has two modes and a package
 # conforms only if both hold. `colors.yml` is keygen mode (no vultr-ssh-keys):
@@ -60,6 +61,14 @@ for variant in colors optout; do
       echo "golden: $profile no longer renders $ph as a placeholder" >&2; exit 1
     fi
   done
+
+  # Compute Provider Standard §4: the compute stage records which provider's
+  # template produced its params, which is what makes a later provider switch
+  # decidable. A template that stops recording it re-opens the cross-provider
+  # replacement the standard exists to refuse.
+  if ! grep -q 'provider = "vultr"' "$actual/netbird-infrastructure/main.tf"; then
+    echo "golden: $profile no longer records params.provider in the compute output" >&2; exit 1
+  fi
 
   # A build that reached the real ~/.ssh would leak the operator's home into
   # committed bytes and make the goldens workstation-specific.

@@ -10,6 +10,70 @@ def test_optout_fixture_is_valid():
     assert validate.state_errors(optout()) == []
 
 
+# --- the spec handed to ONCE
+
+
+def test_the_spec_carries_this_packages_registry_sources_and_default():
+    # The operations are ONCE's; this is the data they run over. A colour
+    # whose registry, sources or default drifts fails here, in that colour.
+    assert list(validate.spec["registry"]) == ["vultr"]
+    assert validate.spec["registry"] is validate.compute_providers
+    assert validate.spec["registry"]["vultr"] == {
+        "required": ["vultr-region", "vultr-plan", "vultr-os-id",
+                     "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources"],
+        "secrets": ["vultr-api-key"],
+        "tofu-env": {"vultr-api-key": "VULTR_API_KEY"},
+    }
+    # STUN is the third list, this package's extension of the standard's two.
+    assert validate.spec["sources"] == {"non_empty": ["ssh-sources"],
+                                        "may_be_empty": ["http-sources", "stun-sources"]}
+    assert validate.spec["default"] == "vultr"
+    assert validate.spec["default"] == validate.default_compute_provider
+    # The name rules are ONCE's.
+    assert "name_rules" not in validate.spec
+
+
+# --- the compute-provider registry
+
+
+def test_unsupported_provider_names_the_advertised_ones():
+    assert ":provider-compute must be one of vultr" in \
+        validate.state_errors(fixture({"provider-compute": "digitalocean"}))
+
+
+def test_required_keys_secrets_and_tofu_env_follow_the_selected_provider():
+    assert ":vultr-plan is required" in validate.state_errors(fixture({"vultr-plan": None}))
+    assert ":vultr-stun-sources is required" in \
+        validate.state_errors(fixture({"vultr-stun-sources": None}))
+    # Another provider's keys are neither required nor refused.
+    assert validate.state_errors(fixture({"digitalocean-region": "ams3"})) == []
+    assert validate.tofu_env(fixture(), "provider-compute") == {"vultr-api-key": "VULTR_API_KEY"}
+    assert validate.tofu_env(fixture({"provider-compute": "digitalocean"}), "provider-compute") == {}
+
+
+# --- the network contract (Compute Provider Standard §5)
+
+
+def test_ssh_sources_must_not_be_empty():
+    # ONCE's check, wired through `spec`: a machine nobody can reach is not a
+    # deployment, while no public HTTP and no public STUN are both legitimate.
+    assert ":vultr-ssh-sources must list at least one CIDR" in \
+        validate.state_errors(fixture({"vultr-ssh-sources": []}))
+    assert ":vultr-ssh-sources must list at least one CIDR" in \
+        validate.state_errors(fixture({"vultr-ssh-sources": " , "}))
+    assert validate.state_errors(fixture({"vultr-http-sources": []})) == []
+    assert validate.state_errors(fixture({"vultr-stun-sources": []})) == []
+
+
+def test_malformed_sources_are_refused_before_any_provider_call():
+    assert ':vultr-http-sources entry "10.0.0.0" is not an IPv4 or IPv6 CIDR' in \
+        validate.state_errors(fixture({"vultr-http-sources": ["0.0.0.0/0", "10.0.0.0"]}))
+    assert ':vultr-stun-sources entry "office.example.com/32" is not an IPv4 or IPv6 CIDR' in \
+        validate.state_errors(fixture({"vultr-stun-sources": "office.example.com/32"}))
+    assert validate.state_errors(
+        fixture({"vultr-ssh-sources": ["2001:db8::/32", "203.0.113.0/24"]})) == []
+
+
 def test_machine_key_is_not_required():
     # The standard makes absence meaningful: requiring vultr-ssh-keys would
     # make every conforming deployment invalid.
@@ -63,14 +127,14 @@ def test_reports_all_errors():
         "netbird-host": "bad",
         "netbird-server-image": "floating",
         "netbird-letsencrypt-email": "not-an-email",
-        "provider-dns": "other", "provider-compute": "digitalocean",
+        "provider-dns": "other",
         "netbird-backup-retention-days": 0,
         "netbird-backup-dir": "relative/path",
         "netbird-stun-port": 70000,
         "netbird-docker-subnet": "nonsense",
         "vultr-os-id": "2284"}))
     assert len(errors) >= 9
-    for part in ["host", "image", "letsencrypt-email", "provider-dns", "provider-compute",
+    for part in ["host", "image", "letsencrypt-email", "provider-dns",
                  "os-id", "retention-days", "backup-dir", "stun-port", "docker-subnet"]:
         assert any(part in e for e in errors), part
 

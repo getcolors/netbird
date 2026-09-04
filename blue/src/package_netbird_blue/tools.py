@@ -12,6 +12,7 @@ from blue.ansible import ansible_with_spec
 from blue.cli import stage_dir
 from blue.runtime import runtime
 from blue.scaffold import PRESERVE_JINJA_DELIMITERS, content_spec
+from package_once_blue import compute as once_compute
 
 from . import ssh_config, validate
 
@@ -28,7 +29,9 @@ def tool_dir(opts: dict, tool: str) -> str:
 
 
 def template(path: str, file: str) -> dict:
-    name = f"tools/{path}/{file}"
+    """A template from the tree this colour carries, keyed the way green names
+    its classpath resources: dots in `path` are directories."""
+    name = f"tools/{path.replace('.', '/')}/{file}"
     return {"name": name, "content": (ROOT / name).read_text()}
 
 
@@ -40,11 +43,9 @@ def raw_spec(target: str, content: str) -> dict:
     return content_spec(target, content)
 
 
-def cidrs(opts: dict, key: str) -> list[str]:
-    value = opts.get(key)
-    xs = value if isinstance(value, list) else re.split(
-        r"[,\s]+", "" if value is None else str(value))
-    return [s for s in (str(x).strip() for x in xs) if s]
+# The source lists as validate parses them, so the template and the
+# validator can never disagree about what an entry is.
+cidrs = validate.cidrs
 
 
 def credential_env(opts: dict, *slots: str) -> dict[str, str] | None:
@@ -63,30 +64,44 @@ def backend_credential_env(opts: dict) -> dict[str, str] | None:
     return credential_env(opts)
 
 
-def fallback_params(opts: dict) -> dict:
-    return {"ip": "192.0.2.10", "user": "root", "sudoer": "root",
-            "name": validate.compute_name(opts)}
+# What `build` and `--dry-run` render in place of a compute output: the
+# documentation address, shaped like the selected provider's real `params` so
+# every later stage sees the same keys either way. ONCE's.
+fallback_params = once_compute.fallback_params
 
-
-def output_params(result: dict) -> dict | None:
-    return (result.get("tofu/outputs") or {}).get("params")
+# Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute output
+# carries no `ip`. ONCE's; `infrastructure_step` is what wires it.
+resolved_compute = once_compute.resolved_compute
 
 
 # ---------------------------------------------------------------- compute
 
 
 def infrastructure_data(opts: dict) -> dict:
+    """Template values for the compute stage. The name and the three source
+    lists are resolved here once, so a template interpolates values and never
+    branches on which provider it belongs to."""
     return {**opts,
             "ssh-keygen": validate.keygen(opts),
             "compute-name": validate.compute_name(opts),
-            "ssh-sources-hcl": tofu.hcl_list(cidrs(opts, "vultr-ssh-sources")),
-            "http-sources-hcl": tofu.hcl_list(cidrs(opts, "vultr-http-sources")),
-            "stun-sources-hcl": tofu.hcl_list(cidrs(opts, "vultr-stun-sources"))}
+            "ssh-sources-hcl": tofu.hcl_list(
+                cidrs(opts, validate.compute_key(opts, "ssh-sources"))),
+            "http-sources-hcl": tofu.hcl_list(
+                cidrs(opts, validate.compute_key(opts, "http-sources"))),
+            "stun-sources-hcl": tofu.hcl_list(
+                cidrs(opts, validate.compute_key(opts, "stun-sources")))}
+
+
+def infrastructure_template(opts: dict) -> dict:
+    """Providers are selected by template directory,
+    `infrastructure/<provider>/`, not by conditionals inside one file; the
+    rendered target is the same `main.tf` whichever directory it came from."""
+    return template(f"infrastructure.{opts.get('provider-compute')}", "main.tf")
 
 
 async def infrastructure_step(opts: dict) -> dict:
     dir = tool_dir(opts, infrastructure_tool)
-    specs = [spec(template("infrastructure", "main.tf"), f"{dir}/main.tf",
+    specs = [spec(infrastructure_template(opts), f"{dir}/main.tf",
                   infrastructure_data(opts))]
     result = await tofu.tofu_with_spec(
         opts, specs, dir=dir, env=credential_env(opts, "provider-compute"))
@@ -96,7 +111,7 @@ async def infrastructure_step(opts: dict) -> dict:
         return {**result, **fallback_params(opts)}
     if opts.get("blue/event") == "delete":
         return result
-    return {**result, **fallback_params(opts), **(output_params(result) or {})}
+    return resolved_compute(result, fallback_params(opts), once_compute.output_params(result))
 
 
 # -------------------------------------------------------------------- dns

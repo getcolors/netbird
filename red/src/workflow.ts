@@ -1,50 +1,66 @@
 import { readPars, parName } from "red/cli";
 import * as dryRun from "red/dry-run";
-import { preflight } from "red/lifecycle";
+import { preflight, type PreflightContext } from "red/lifecycle";
 import * as progress from "red/progress";
 import * as tofu from "red/tofu";
 import { adviceAdd, failed, workflow, type Opts, type WireDecl } from "red/workflow";
+import { compute } from "package-once-red";
 import * as ssh from "./ssh.ts";
 import * as sshConfig from "./ssh-config.ts";
 import * as tools from "./tools.ts";
 import * as validate from "./validate.ts";
 
 export const defaults: Opts = {
-  "provider-compute": "vultr", "provider-dns": "cloudflare",
+  "provider-compute": validate.defaultComputeProvider, "provider-dns": "cloudflare",
   "provider-backend": "local", "compute-prevent-destroy": true,
   workdir: ".colors",
 };
 
-// The compute stage's applied `params`, or undefined when no state is
-// readable. The create matrix keys on this best-effort read: an unreadable
-// state (a fresh clone, a missing backend) counts as absent.
-export async function stateOutput(opts: Opts): Promise<Record<string, unknown> | undefined> {
-  try {
-    const outputs = await tofu.outputs(
-      tools.toolDir(opts, tools.infrastructureTool),
-      tools.backendCredentialEnv(opts),
-    );
-    const params = outputs.params;
-    return params && typeof params === "object" ? params as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
+// Compute params recorded in the infrastructure state; undefined when the
+// state holds none. An unreadable backend throws the SDK's `StepError`, which
+// `compute.readState` turns into `{ error }` — create and delete treat the two
+// differently. Kept local, and injectable into `startStep`, so tests never
+// shell out to tofu.
+export async function stateOutput(opts: Opts): Promise<compute.Params | undefined> {
+  const outputs = await tofu.outputs(
+    tools.toolDir(opts, tools.infrastructureTool),
+    tools.backendCredentialEnv(opts),
+  );
+  const params = outputs.params;
+  return params && typeof params === "object" ? params as compute.Params : undefined;
 }
 
 export async function startStep(
   opts: Opts,
   env: Record<string, string | undefined> = process.env,
+  reader: compute.StateReader = stateOutput,
 ): Promise<Opts> {
+  // The state is read once, up front, on the same defaulted and overlaid opts
+  // the validators see — the overlay is what carries the backend credentials —
+  // and only for the two events that touch a provider. The validator and the
+  // after-validate share the one read; the reader is injectable so tests never
+  // shell out to tofu.
+  const overlaid = readPars({ ...defaults, ...opts }, env);
+  const context: PreflightContext = {
+    event: typeof overlaid["red/event"] === "string" ? overlaid["red/event"] as string : undefined,
+    real: !overlaid["red/dry-run"],
+  };
+  const state: compute.StateRead = compute.lifecycleEvent(context)
+    ? await compute.readState(overlaid, reader) : {};
   return preflight(opts, {
     defaults,
     overlay: readPars,
     validators: [
       (_opts, environment) => validate.envErrors(environment),
       (current) => validate.stateErrors(current),
-      (current, _environment, { event, real }) =>
-        real && (event === "create" || event === "delete")
-          ? validate.secretErrors(current, event)
-          : [],
+      // Standard §4 before the credentials: a recorded provider that differs
+      // from the selected one reports the actionable error, not a missing
+      // token for the provider that was just selected. The thunk carries the
+      // event, so a delete still asks for no account password.
+      (current, _environment, ctx) => (compute.lifecycleEvent(ctx)
+        ? compute.providerValidator(validate.spec, current, state.params,
+                                    () => validate.secretErrors(current, ctx.event))
+        : []),
       (current, _environment, { event, real }) =>
         real && event === "delete" && current["compute-prevent-destroy"]
           ? [`compute destruction is protected; set ${parName("compute-prevent-destroy")}=false to delete`]
@@ -53,18 +69,13 @@ export async function startStep(
     // The machine key's create matrix and the Vultr preflight run before any
     // template is rendered: an unowned key on disk or at the provider stops
     // the run while stopping is still free. Delete fills the same template
-    // values — a destroy renders before it destroys — but checks nothing,
-    // because its key cleanup runs after the compute destroy.
+    // values — a destroy renders before it destroys — and adopts the recorded
+    // address, but checks no key, because its key cleanup runs after the
+    // compute destroy.
     afterValidate: async (current, _environment, { event, real }) => {
-      if (real && event === "delete") {
-        return {
-          ...ssh.withMachineKey(current),
-          ...(await stateOutput(current) ?? {}),
-          "red/exit": 0,
-        };
-      }
+      if (real && event === "delete") return compute.adoptState(current, "delete", state);
       if (real && event === "create") {
-        let next = await ssh.ensureKey(current, stateOutput);
+        let next = await ssh.ensureKey(current, async () => state.params);
         if (failed(next)) return next;
         next = await ssh.preflight(ssh.withMachineKey(next));
         if (!failed(next)) next = sshConfig.preflight(next);
