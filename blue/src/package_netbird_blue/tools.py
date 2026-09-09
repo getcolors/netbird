@@ -206,7 +206,7 @@ def ansible_specs(opts: dict) -> list[dict]:
 
 async def ansible_step(opts: dict) -> dict:
     dir = tool_dir(opts, ansible_tool)
-    if opts.get("blue/event") == "delete" and not opts.get("ip"):
+    if opts.get("blue/event") == "delete" and (opts.get("netbird/already-destroyed") or not opts.get("ip")):
         # No compute in state: there is no host to stop, and the cleanup play
         # would only fail against the placeholder address.
         return {**opts, "blue/exit": 0}

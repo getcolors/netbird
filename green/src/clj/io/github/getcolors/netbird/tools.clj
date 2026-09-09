@@ -155,7 +155,7 @@
 
 (defn ansible-step [opts]
   (let [dir (tool-dir opts ansible-tool)]
-    (if (and (= :delete (:green/event opts)) (not (:ip opts)))
+    (if (and (= :delete (:green/event opts)) (or (:netbird/already-destroyed opts) (not (:ip opts))))
       ;; No compute in state: there is no host to stop, and the cleanup play
       ;; would only fail against the placeholder address.
       (assoc opts :green/exit 0)
