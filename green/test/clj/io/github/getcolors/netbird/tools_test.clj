@@ -117,3 +117,8 @@
   ;; nothing in the NetBird API will create it on that user's behalf.
   (let [targets (map #(str (:target %)) (tools/ansible-specs (fixture)))]
     (is (some #(str/ends-with? % "federated-login.py") targets))))
+
+(deftest destroyed-inspection-skips-address-dependent-cleanup
+  (let [opts {:green/event :delete :netbird/already-destroyed true}]
+    (is (= opts (tools/dns-step opts)))
+    (is (= opts (tools/ansible-local-step opts)))))

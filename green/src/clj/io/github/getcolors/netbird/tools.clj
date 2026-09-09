@@ -65,13 +65,14 @@
                      :proxied false :ttl 60})]))
 
 (defn dns-step [opts]
+  (if (:netbird/already-destroyed opts) opts
   (let [dir (tool-dir opts dns-tool)
         data (assoc opts
                     :ip (or (:ip opts) (:ip (fallback-params opts)))
                     :netbird-zone (validate/zone opts))
         specs [(spec (template "dns" "main.tf") (str dir "/main.tf") data)
                (raw-spec (str dir "/record.tf.json") (dns-json data))]]
-    (tofu/tofu-with-spec opts specs {:dir dir :env (credential-env opts :provider-dns)})))
+    (tofu/tofu-with-spec opts specs {:dir dir :env (credential-env opts :provider-dns)}))))
 
 ;; ---------------------------------------------------------- ansible (local)
 
@@ -95,6 +96,7 @@
   "Write or remove the `~/.ssh/config` block. The same playbook serves both
   events; `block_state` is what distinguishes them."
   [opts]
+  (if (:netbird/already-destroyed opts) opts
   (let [dir (tool-dir opts ansible-local-tool)
         delete? (= :delete (:green/event opts))]
     (ansible/ansible-with-spec opts
@@ -104,7 +106,7 @@
                     :ip (or (:ip opts) (:ip (fallback-params opts)))
                     :user (or (:user opts) "root")
                     :block_state (if delete? "absent" "present")}}
-      (ansible-local-specs opts))))
+      (ansible-local-specs opts)))))
 
 ;; ---------------------------------------------------------------- ansible
 
