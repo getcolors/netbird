@@ -149,5 +149,5 @@
          (vec (rest (workflow/wire-fn :netbird/dns {:green/event :delete})))))
   (is (= [:netbird/infrastructure]
          (vec (rest (workflow/wire-fn :netbird/ssh-config {:green/event :delete})))))
-  (is (= [:netbird/ssh-cleanup]
+  (is (= []
          (vec (rest (workflow/wire-fn :netbird/infrastructure {:green/event :delete}))))))

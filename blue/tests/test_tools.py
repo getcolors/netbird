@@ -11,25 +11,6 @@ def resource(path):
     return (tools.ROOT / path).read_text()
 
 
-def test_firewall_sources_parse():
-    data = tools.infrastructure_data(fixture())
-    assert tools.cidrs(data, "vultr-http-sources") == ["0.0.0.0/0"]
-    assert tools.cidrs(data, "vultr-stun-sources") == ["0.0.0.0/0"]
-
-
-def test_infrastructure_data_carries_the_ssh_mode():
-    assert tools.infrastructure_data(fixture())["ssh-keygen"] is True
-    assert tools.infrastructure_data(optout())["ssh-keygen"] is False
-
-
-def test_every_label_derives_from_one_resolved_name():
-    # Compute Name Standard §3: one function answers "what is this deployment's
-    # machine called", and the firewall asks it too rather than keeping a
-    # second copy of the profile.
-    data = tools.infrastructure_data(fixture({"vultr-name": "override-box"}))
-    assert data["compute-name"] == "override-box"
-
-
 def test_dns_zone_is_registrable_domain():
     assert validate.zone(fixture()) == "example.com"
 

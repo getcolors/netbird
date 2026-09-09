@@ -3,13 +3,11 @@
  :tasks
  {test {:requires ([clojure.test :as t]
                    [io.github.getcolors.netbird.validate-test]
-                   [io.github.getcolors.netbird.ssh-test]
                    [io.github.getcolors.netbird.ssh-config-test]
                    [io.github.getcolors.netbird.tools-test]
                    [io.github.getcolors.netbird.workflow-test])
         :task (let [{:keys [fail error]}
                     (t/run-tests 'io.github.getcolors.netbird.validate-test
-                                 'io.github.getcolors.netbird.ssh-test
                                  'io.github.getcolors.netbird.ssh-config-test
                                  'io.github.getcolors.netbird.tools-test
                                  'io.github.getcolors.netbird.workflow-test)]

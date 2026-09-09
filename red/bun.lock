@@ -5,7 +5,8 @@
     "": {
       "name": "package-netbird-red-dev",
       "dependencies": {
-        "package-once-red": "github:getcolors/once#38e3cd66674a32fb96605e1b17ae6791086ad5c1",
+        "colors-compute-red": "github:getcolors/colors-compute#3451a05e719b0ad6809f3c88b241a8c010b8f58b",
+        "package-once-red": "github:getcolors/once#a1fe1be7a427dd2e406ff7befd1c43a53e7c3618",
         "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e",
       },
       "devDependencies": {
@@ -61,7 +62,9 @@
 
     "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
 
-    "package-once-red": ["package-once-red@github:getcolors/once#38e3cd6", { "peerDependencies": { "red": "*" }, "optionalPeers": ["red"] }, "getcolors-once-38e3cd6", "sha512-dKUZTCH7WsovGDcbOQ+cccNTMPNjBRUTvXvXILiZx/FujBQioSbwz0U2LpIa+3/osdguCiV5e21bDqPf/7m+pw=="],
+    "colors-compute-red": ["colors-compute-red@github:getcolors/colors-compute#3451a05", { "dependencies": { "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e" } }, "getcolors-colors-compute-3451a05", "sha512-Bdm0WRdv9xQztipIf08YFrYIcnaWCpDsC21bIFM6htAkx6Efbbp+5apWKmFrhSB4nJYufyCaswa+nUhEug0TUA=="],
+
+    "package-once-red": ["package-once-red@github:getcolors/once#a1fe1be", { "peerDependencies": { "colors-compute-red": "*", "red": "*" }, "optionalPeers": ["colors-compute-red", "red"] }, "getcolors-once-a1fe1be", "sha512-QDx9xiW8CEFNmzSRf9YOpm9CtEVqUkE83z04dHJ8QRxNghlzhCJ8A23eYxJa79MgcPo2RKDua7htaYa/puqLdg=="],
 
     "red": ["red@github:getcolors/red#db9bfe6", { "dependencies": { "zod": "^4.0.0" } }, "getcolors-red-db9bfe6", "sha512-3uHKgJeICb/ljQxiTzLTLUdFNfNqvzPGv08X4LRVOU5uk7wmT7wEuVag/xhj87Qn6tvCtAG8uDp8IbIROBGmmg=="],
 
@@ -70,5 +73,7 @@
     "undici-types": ["undici-types@8.3.0", "", {}, "sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ=="],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+
+    "colors-compute-red/red": ["red@github:getcolors/red#db9bfe6", { "dependencies": { "zod": "^4.0.0" } }, "getcolors-red-db9bfe6", "sha512-3uHKgJeICb/ljQxiTzLTLUdFNfNqvzPGv08X4LRVOU5uk7wmT7wEuVag/xhj87Qn6tvCtAG8uDp8IbIROBGmmg=="],
   }
 }

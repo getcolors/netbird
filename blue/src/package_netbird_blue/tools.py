@@ -12,7 +12,7 @@ from blue.ansible import ansible_with_spec
 from blue.cli import stage_dir
 from blue.runtime import runtime
 from blue.scaffold import PRESERVE_JINJA_DELIMITERS, content_spec
-from package_once_blue import compute as once_compute
+from . import compute
 
 from . import ssh_config, validate
 
@@ -64,55 +64,11 @@ def backend_credential_env(opts: dict) -> dict[str, str] | None:
     return credential_env(opts)
 
 
-# What `build` and `--dry-run` render in place of a compute output: the
-# documentation address, shaped like the selected provider's real `params` so
-# every later stage sees the same keys either way. ONCE's.
-fallback_params = once_compute.fallback_params
+def fallback_params(opts):
+    if opts.get('blue/event') != 'build' and not opts.get('blue/dry-run'): raise ValueError('compute parameters unavailable')
+    return {'ip':'192.0.2.10','user':'root','sudoer':'root','name':validate.compute_name(opts)}
 
-# Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute output
-# carries no `ip`. ONCE's; `infrastructure_step` is what wires it.
-resolved_compute = once_compute.resolved_compute
-
-
-# ---------------------------------------------------------------- compute
-
-
-def infrastructure_data(opts: dict) -> dict:
-    """Template values for the compute stage. The name and the three source
-    lists are resolved here once, so a template interpolates values and never
-    branches on which provider it belongs to."""
-    return {**opts,
-            "ssh-keygen": validate.keygen(opts),
-            "compute-name": validate.compute_name(opts),
-            "ssh-sources-hcl": tofu.hcl_list(
-                cidrs(opts, validate.compute_key(opts, "ssh-sources"))),
-            "http-sources-hcl": tofu.hcl_list(
-                cidrs(opts, validate.compute_key(opts, "http-sources"))),
-            "stun-sources-hcl": tofu.hcl_list(
-                cidrs(opts, validate.compute_key(opts, "stun-sources")))}
-
-
-def infrastructure_template(opts: dict) -> dict:
-    """Providers are selected by template directory,
-    `infrastructure/<provider>/`, not by conditionals inside one file; the
-    rendered target is the same `main.tf` whichever directory it came from."""
-    return template(f"infrastructure.{opts.get('provider-compute')}", "main.tf")
-
-
-async def infrastructure_step(opts: dict) -> dict:
-    dir = tool_dir(opts, infrastructure_tool)
-    specs = [spec(infrastructure_template(opts), f"{dir}/main.tf",
-                  infrastructure_data(opts))]
-    result = await tofu.tofu_with_spec(
-        opts, specs, dir=dir, env=credential_env(opts, "provider-compute"))
-    if (result.get("blue/exit") or 0) > 0:
-        return result
-    if opts.get("blue/event") == "build":
-        return {**result, **fallback_params(opts)}
-    if opts.get("blue/event") == "delete":
-        return result
-    return resolved_compute(result, fallback_params(opts), once_compute.output_params(result))
-
+infrastructure_step = compute.compute_step
 
 # -------------------------------------------------------------------- dns
 
@@ -144,6 +100,7 @@ def dns_json(opts: dict) -> str:
 
 
 async def dns_step(opts: dict) -> dict:
+    if opts.get('netbird/already-destroyed'): return opts
     dir = tool_dir(opts, dns_tool)
     data = {**opts,
             "ip": opts.get("ip") or fallback_params(opts)["ip"],
@@ -163,7 +120,7 @@ def ansible_local_data(opts: dict) -> dict:
     rendered playbook carries no IP and is identical on every workstation (SSH
     Config Standard §6)."""
     return {**opts,
-            "ssh-keygen": validate.keygen(opts),
+            "ssh-keygen": (opts['colors-compute/key']['mode'] == 'managed' if 'colors-compute/key' in opts else validate.keygen(opts)),
             "ssh-config-identity-file": ssh_config.identity_file(opts)}
 
 
@@ -177,6 +134,7 @@ def ansible_local_specs(opts: dict) -> list[dict]:
 async def ansible_local_step(opts: dict) -> dict:
     """Write or remove the `~/.ssh/config` block. The same playbook serves both
     events; `block_state` is what distinguishes them."""
+    if opts.get('netbird/already-destroyed'): return opts
     dir = tool_dir(opts, ansible_local_tool)
     delete = opts.get("blue/event") == "delete"
     return await ansible_with_spec(
@@ -212,7 +170,7 @@ def inventory(opts: dict) -> str:
     return _pretty(
         {"all": {"children": {"netbird": {"hosts": {
             opts.get("profile"): {"ansible_host": opts.get("ip") or "192.0.2.10",
-                                  "ansible_user": "root"}}}}}})
+                                  "ansible_user": opts.get("user") or "root"}}}}}})
 
 
 def ansible_data(opts: dict) -> dict:
@@ -227,7 +185,7 @@ def ansible_data(opts: dict) -> dict:
     return {**opts,
             "ip": opts.get("ip") or "192.0.2.10",
             "traefik-ip": validate.traefik_ip(opts),
-            "ssh-keygen": validate.keygen(opts)}
+            "ssh-keygen": (opts['colors-compute/key']['mode'] == 'managed' if 'colors-compute/key' in opts else validate.keygen(opts))}
 
 
 ANSIBLE_FILES = [
@@ -256,7 +214,7 @@ async def ansible_step(opts: dict) -> dict:
         opts, ansible_specs(opts),
         dir=dir, inventory="inventory.json",
         playbooks={"create": "main.yml", "delete": "cleanup.yml"},
-        host_key_checking=False)
+        host_key_checking=False, private_key=opts.get("ssh-private-key-path"))
 
 
 # ------------------------------------------------------------- acceptance

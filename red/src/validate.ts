@@ -1,49 +1,12 @@
 import { parName } from "red/cli";
 import type { Opts } from "red/workflow";
-import { compute, providers, registrableDomain } from "package-once-red";
-import { onceSsh } from "./once.ts";
+import { registrableDomain } from "package-once-red";
+import {registry,plan_deployment} from "colors-compute-red";
+import * as compute from "./compute.ts";
 
 export const profilePar = parName("profile");
 
-// provider-compute -> what that choice implies.
-//
-// `required` are the non-secret keys that provider's template interpolates,
-// `secrets` the credentials it needs through COLORS_PAR_*, and `tofuEnv` the
-// subset OpenTofu reads from the process environment itself. Keeping the three
-// together is what stops a provider being validated against one set of keys and
-// run with another — a stage exporting a credential nobody checked for, or a
-// check demanding a key no template uses. The keys of this map are the
-// advertised providers; a provider without a template directory and a golden
-// is not advertised, and this package advertises one.
-//
-// Two keys the template reads are deliberately not required. `vultr-name` is
-// an optional override of the profile (Compute Name Standard), and
-// `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard). The
-// third source list, `vultr-stun-sources`, is this package's extension of the
-// standard's two: STUN is the one UDP port it publishes.
-export const computeProviders: compute.Registry = {
-  vultr: {
-    required: ["vultr-region", "vultr-plan", "vultr-os-id",
-               "vultr-ssh-sources", "vultr-http-sources", "vultr-stun-sources"],
-    secrets: ["vultr-api-key"],
-    tofuEnv: { "vultr-api-key": "VULTR_API_KEY" },
-  },
-};
-
-// The provider a deployment created before this package recorded one in its
-// compute output must be running: the only one it ever offered.
 export const defaultComputeProvider = "vultr";
-
-// How this package describes itself to ONCE's `compute`, the Compute Provider
-// Standard's operations over a package-owned registry. The registry and the
-// default are the data above; `sources` names the firewall lists the template
-// reads — SSH must list at least one CIDR; an empty HTTP list means no public
-// HTTP and an empty STUN list no public STUN. The name rules are ONCE's.
-export const spec: compute.ComputeSpec = {
-  registry: computeProviders,
-  default: defaultComputeProvider,
-  sources: { nonEmpty: ["ssh-sources"], mayBeEmpty: ["http-sources", "stun-sources"] },
-};
 
 // Every key desired state must carry whichever provider is selected. The
 // provider-scoped keys come from `computeProviders`.
@@ -90,40 +53,10 @@ export function missing(value: unknown): boolean {
     (typeof value === "string" && value.trim() === "");
 }
 
-// `<provider>-<suffix>`: desired state names compute keys after the provider,
-// so the shared steps reach them through the selected provider rather than a
-// fixed prefix. ONCE's; named here so `tools` reads the same.
-export const computeKey = compute.computeKey;
+export function computeName(opts:Opts):string{return plan_deployment(opts,compute.topology,compute.requirements(opts)).cluster.nodes[0].name;}
+export function keygen(opts:Opts):boolean{return plan_deployment(opts,compute.topology,compute.requirements(opts)).key.mode==='managed';}
+export function cidrs(opts:Opts,key:string):string[]{const value=opts[key];return Array.isArray(value)?value.map(String):String(value??'').split(/[,\s]+/).filter(Boolean);}
 
-// What this deployment calls its machine: `vultr-name` when present and not a
-// placeholder, else the profile (Compute Name Standard). ONCE's; every label,
-// including the firewall's, derives from this one answer and never from the
-// raw override key or a second copy of the profile (§3).
-export const computeName = compute.computeName;
-
-// Whether this deployment owns its machine keypair. Delegates to ONCE, the
-// standard's reference implementation, so one rule decides it everywhere.
-export function keygen(opts: Opts): boolean {
-  return onceSsh.keygen(opts);
-}
-
-// A source list as desired state or an overlay string carries it. ONCE's, so
-// the validator and the template can never disagree about what an entry is.
-export const cidrs = compute.cidrs;
-
-// A fixed address for Traefik on the compose network, derived from the subnet
-// rather than configured.
-//
-// It exists because of hairpin NAT. `netbird-server` must fetch the Authentik
-// issuer's discovery document over its **public** URL — the issuer in a token
-// has to match the one a browser used — but a container resolving that name
-// gets the host's own public address, and the connection times out on the way
-// back in. Mapping the name to Traefik's address on the shared network sends
-// the request straight to the proxy, which still serves the real certificate
-// for it, so TLS and the issuer string both stay honest.
-//
-// Derived, not a key: a value that can only correctly be `<subnet>.10` is a
-// transcription step, and transcription drifts.
 export function traefikIp(opts: Opts): string | undefined {
   const base = String(opts["netbird-docker-subnet"] ?? "").split("/")[0] ?? "";
   const octets = base.split(".");
@@ -148,14 +81,11 @@ export function envErrors(env: Record<string, string | undefined>): string[] {
 // are ONCE's over `spec`.
 export function stateErrors(opts: Opts): string[] {
   const errors: string[] = [];
-  for (const key of [...required, ...compute.requiredKeys(spec, opts)]) {
+  for (const key of required) {
     if (missing(opts[key])) errors.push(`:${key} is required`);
   }
   if (opts["provider-dns"] !== "cloudflare") {
     errors.push(":provider-dns must be cloudflare");
-  }
-  if (!["local", "s3", "r2"].includes(String(opts["provider-backend"]))) {
-    errors.push(":provider-backend must be local, s3, or r2");
   }
   if (typeof opts["compute-prevent-destroy"] !== "boolean") {
     errors.push(":compute-prevent-destroy must be true or false");
@@ -231,18 +161,18 @@ export function stateErrors(opts: Opts): string[] {
         (typeof retention === "number" && Number.isInteger(retention) && retention > 0))) {
     errors.push(":netbird-backup-retention-days must be a positive integer");
   }
-  errors.push(...compute.stateErrors(spec, opts));
+  errors.push(...compute.errors(opts));
   return errors;
 }
 
 export function backendSecrets(opts: Opts): string[] {
-  return providers["provider-backend"]?.[String(opts["provider-backend"])]?.secrets ?? [];
+  return (registry.backend as Record<string,any>)?.[String(opts["provider-backend"])]?.secrets ?? [];
 }
 
 // What talking to the providers needs, on any real event: the selected compute
 // provider's credential, from the registry, and Cloudflare's.
 export function providerSecrets(opts: Opts): string[] {
-  return [...compute.secrets(spec, opts), "cloudflare-api-token"];
+  return ["cloudflare-api-token"];
 }
 
 // What converging the machine needs, and therefore only a create.
@@ -283,11 +213,10 @@ export function secretErrors(opts: Opts, event: string | undefined): string[] {
 export function tofuEnv(opts: Opts, slot: string): Record<string, string> {
   switch (slot) {
     case "provider-compute":
-      return compute.tofuEnv(spec, opts);
+      return {};
     case "provider-dns":
       return { "cloudflare-api-token": "CLOUDFLARE_API_TOKEN" };
-    case "provider-backend":
-      return providers["provider-backend"]?.[String(opts["provider-backend"])]?.tofuEnv ?? {};
+    case "provider-backend": return opts['provider-backend']==='r2' ? {'r2-access-key-id':'AWS_ACCESS_KEY_ID','r2-secret-access-key':'AWS_SECRET_ACCESS_KEY'} : {};
     default:
       return {};
   }

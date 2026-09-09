@@ -9,22 +9,6 @@
 (defn- spec-for [opts file]
   (some #(when (str/ends-with? (str (:target %)) file) %) (tools/ansible-specs opts)))
 
-(deftest firewall-sources-parse
-  (let [data (tools/infrastructure-data (fixture))]
-    (is (= ["0.0.0.0/0"] (tools/cidrs data :vultr-http-sources)))
-    (is (= ["0.0.0.0/0"] (tools/cidrs data :vultr-stun-sources)))))
-
-(deftest infrastructure-data-carries-the-ssh-mode
-  (is (true? (:ssh-keygen (tools/infrastructure-data (fixture)))))
-  (is (false? (:ssh-keygen (tools/infrastructure-data (optout))))))
-
-(deftest every-label-derives-from-one-resolved-name
-  ;; Compute Name Standard §3: one function answers "what is this deployment's
-  ;; machine called", and the firewall asks it too rather than keeping a second
-  ;; copy of the profile.
-  (let [data (tools/infrastructure-data (fixture :vultr-name "override-box"))]
-    (is (= "override-box" (:compute-name data)))))
-
 (deftest dns-zone-is-registrable-domain
   (is (= "example.com" (validate/zone (fixture)))))
 

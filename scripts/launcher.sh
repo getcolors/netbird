@@ -9,7 +9,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cp "$launcher" "$tmp/green"; chmod +x "$tmp/green"
 sed "s#WORKDIR#.colors#" "$root/test/fixtures/colors.yml" > "$tmp/colors.yml"
 (cd "$tmp" && NETBIRD_LIB_ROOT="$root" ./green build >/dev/null)
-[[ -f "$tmp/.colors/netbird-fixture/netbird-infrastructure/main.tf" ]]
+[[ -f "$tmp/.colors/netbird-fixture/compute/nodes/0/node-none.tf.json" ]]
 [[ -f "$tmp/.colors/netbird-fixture/netbird-ansible/compose.yml" ]]
 # The launcher walks up for colors.yml, so any subdirectory works.
 mkdir -p "$tmp/nested/path"

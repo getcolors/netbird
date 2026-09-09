@@ -169,4 +169,4 @@ def test_delete_removes_the_block_before_the_destroy():
     delete = {"blue/event": "delete"}
     assert workflow.wire_fn("netbird/dns", delete)[1:] == ("netbird/ssh-config",)
     assert workflow.wire_fn("netbird/ssh-config", delete)[1:] == ("netbird/infrastructure",)
-    assert workflow.wire_fn("netbird/infrastructure", delete)[1:] == ("netbird/ssh-cleanup",)
+    assert workflow.wire_fn("netbird/infrastructure", delete)[1:] == ()

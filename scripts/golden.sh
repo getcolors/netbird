@@ -62,13 +62,12 @@ for variant in colors optout; do
     fi
   done
 
-  # Compute Provider Standard §4: the compute stage records which provider's
-  # template produced its params, which is what makes a later provider switch
-  # decidable. A template that stops recording it re-opens the cross-provider
-  # replacement the standard exists to refuse.
-  if ! grep -q 'provider = "vultr"' "$actual/netbird-infrastructure/main.tf"; then
-    echo "golden: $profile no longer records params.provider in the compute output" >&2; exit 1
-  fi
+  # The library plan must retain provider identity in normalized node output.
+  python3 - "$actual/compute/nodes/0/node-none.tf.json" <<'PYCODE'
+import json, sys
+value = json.load(open(sys.argv[1]))['output']['params']['value']['provider']
+assert isinstance(value, str) and value
+PYCODE
 
   # A build that reached the real ~/.ssh would leak the operator's home into
   # committed bytes and make the goldens workstation-specific.

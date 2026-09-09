@@ -1,50 +1,13 @@
 (ns io.github.getcolors.netbird.validate
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
-            [io.github.getcolors.once.compute :as compute]
-            [io.github.getcolors.once.ssh :as once-ssh]
+            [io.github.getcolors.netbird.compute :as compute] [io.github.getcolors.compute :as library] [io.github.getcolors.compute-planning :as planning]
             [io.github.getcolors.once.utils :as once-utils]
             [io.github.getcolors.once.validate :as once-validate]))
 
 (def profile-par (green-cli/par-name :profile))
 
-(def compute-providers
-  "provider-compute -> what that choice implies.
-
-  `:required` are the non-secret keys that provider's template interpolates,
-  `:secrets` the credentials it needs through COLORS_PAR_*, and `:tofu-env` the
-  subset OpenTofu reads from the process environment itself. Keeping the three
-  together is what stops a provider being validated against one set of keys and
-  run with another — a stage exporting a credential nobody checked for, or a
-  check demanding a key no template uses. The keys of this map are the
-  advertised providers; a provider without a template directory and a golden
-  is not advertised, and this package advertises one.
-
-  Two keys the template reads are deliberately not required. `vultr-name` is
-  an optional override of the profile (Compute Name Standard), and
-  `vultr-ssh-keys` is meaningful by its absence (SSH Keypair Standard). The
-  third source list, `vultr-stun-sources`, is this package's extension of the
-  standard's two: STUN is the one UDP port it publishes."
-  {"vultr"
-   {:required [:vultr-region :vultr-plan :vultr-os-id
-               :vultr-ssh-sources :vultr-http-sources :vultr-stun-sources]
-    :secrets [:vultr-api-key]
-    :tofu-env {:vultr-api-key "VULTR_API_KEY"}}})
-
-(def default-compute-provider
-  "The provider a deployment created before this package recorded one in its
-  compute output must be running: the only one it ever offered."
-  "vultr")
-
-(def spec
-  "How this package describes itself to ONCE's `compute`, the Compute Provider
-  Standard's operations over a package-owned registry. The registry and the
-  default are the data above; `:sources` names the firewall lists the template
-  reads — SSH must list at least one CIDR; an empty HTTP list means no public
-  HTTP and an empty STUN list no public STUN. The name rules are ONCE's."
-  {:registry compute-providers
-   :default default-compute-provider
-   :sources {:non-empty ["ssh-sources"] :may-be-empty ["http-sources" "stun-sources"]}})
+(def default-compute-provider "vultr")
 
 (def required
   "Every key desired state must carry whichever provider is selected. The
@@ -86,29 +49,9 @@
 
 (defn missing? [x] (or (nil? x) (and (string? x) (str/blank? x))))
 
-(def compute-key
-  "`:<provider>-<suffix>`: desired state names compute keys after the
-  provider, so the shared steps reach them through the selected provider
-  rather than a fixed prefix. ONCE's; named here so `tools` reads the same."
-  compute/key)
-
-(def compute-name
-  "What this deployment calls its machine: `vultr-name` when present and not a
-  placeholder, else the profile (Compute Name Standard). ONCE's; every label,
-  including the firewall's, derives from this one answer and never from the
-  raw override key or a second copy of the profile (§3)."
-  compute/name)
-
-(defn keygen?
-  "Whether this deployment owns its machine keypair. Delegates to ONCE, the
-  standard's reference implementation, so one rule decides it everywhere."
-  [opts]
-  (once-ssh/keygen? opts))
-
-(def cidrs
-  "A source list as desired state or an overlay string carries it. ONCE's, so
-  the validator and the template can never disagree about what an entry is."
-  compute/cidrs)
+(defn compute-name [opts] (get-in (planning/plan-deployment opts compute/topology (compute/requirements opts)) [:cluster :nodes 0 :name]))
+(defn keygen? [opts] (= "managed" (get-in (planning/plan-deployment opts compute/topology (compute/requirements opts)) [:key :mode])))
+(defn cidrs [opts key] (let [v (get opts key)] (if (sequential? v) (vec v) (vec (remove str/blank? (str/split (str v) #"[,\s]+"))))))
 
 (defn traefik-ip
   "A fixed address for Traefik on the compose network, derived from the subnet
@@ -148,13 +91,11 @@
   [opts]
   (vec
    (concat
-    (for [k (concat required (compute/required-keys spec opts))
+    (for [k required
           :when (missing? (get opts k))]
       (str k " is required"))
     (when-not (= "cloudflare" (:provider-dns opts))
       [":provider-dns must be cloudflare"])
-    (when-not (contains? #{"local" "s3" "r2"} (:provider-backend opts))
-      [":provider-backend must be local, s3, or r2"])
     (when-not (boolean? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must be true or false"])
     (for [k [:netbird-host :netbird-authentik-host]
@@ -213,17 +154,17 @@
                   (and (integer? (:netbird-backup-retention-days opts))
                        (pos? (:netbird-backup-retention-days opts))))
       [":netbird-backup-retention-days must be a positive integer"])
-    (compute/state-errors spec opts))))
+    (compute/errors opts))))
 
 (defn backend-secrets [opts]
-  (:secrets (get-in once-validate/providers
-                    [:provider-backend (:provider-backend opts)])))
+  (:secrets (get-in library/registry
+                    [:backend (keyword (:provider-backend opts))])))
 
 (defn provider-secrets
   "What talking to the providers needs, on any real event: the selected
   compute provider's credential, from the registry, and Cloudflare's."
   [opts]
-  (concat (compute/secrets spec opts) [:cloudflare-api-token]))
+  [:cloudflare-api-token])
 
 (def application-secrets
   "What converging the machine needs, and therefore only a create.
@@ -261,8 +202,7 @@
 
 (defn tofu-env [opts slot]
   (case slot
-    :provider-compute (compute/tofu-env spec opts)
+    :provider-compute {}
     :provider-dns {:cloudflare-api-token "CLOUDFLARE_API_TOKEN"}
-    :provider-backend (:tofu-env (get-in once-validate/providers
-                                         [:provider-backend (:provider-backend opts)]) {})
+    :provider-backend (if (= "r2" (:provider-backend opts)) {:r2-access-key-id "AWS_ACCESS_KEY_ID" :r2-secret-access-key "AWS_SECRET_ACCESS_KEY"} {})
     {}))

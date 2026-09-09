@@ -74,3 +74,7 @@ host.
 - Never weaken `compute-prevent-destroy` in committed desired state.
 - The installed launcher is a copy, not a symlink. After `npx skills update -p`,
   copy `.agents/skills/package-netbird-blue/blue` over the root `./blue`.
+
+Compute now uses the pinned `colors-compute` library and its singleton workflow. The package preserves TCP22/80/443, configurable UDP STUN ingress, and disabled VM IPv6. Unsupported provider capabilities fail explicitly. R2/S3 compute state and journal live under `<profile>/compute/`; legacy `<profile>/netbird-infrastructure.tfstate` is refused for explicit migration. DNS remains separate.
+
+The package owns its locked profile SSH updater and removes its alias before compute destruction. The library owns generated key/registration cleanup. External private paths are explicit Ansible inputs; only managed keys add IdentityFile to the alias. Authentik-generated credentials, federation bootstrap, backup encryption, and acceptance scripts remain unchanged. Build and dry-run inspect no local SSH files. No live deployment was used to validate this migration.

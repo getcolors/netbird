@@ -53,7 +53,7 @@
 (defn host-patterns
   "The patterns a `Host` line declares, or nil when the line is not one."
   [line]
-  (when-let [[_ rest] (re-matches #"(?i)\s*Host\s+(.*?)\s*" line)]
+  (when-let [[_ rest] (re-matches #"(?i)\s*Host(?:\s*=\s*|\s+)(.*?)\s*" line)]
     (remove str/blank? (str/split rest #"\s+"))))
 
 (defn foreign-stanza-line
@@ -83,7 +83,7 @@
       (cond
         (nil? line) nil
         (or (str/blank? trimmed) (str/starts-with? trimmed "#")) (recur more (inc n))
-        (re-matches #"(?i)\s*(Host|Match)\s+.*" line) nil
+        (re-matches #"(?i)\s*(Host|Match)(?:\s*=\s*|\s+).*" line) nil
         :else n))))
 
 (defn adopt-error

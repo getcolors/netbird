@@ -7,7 +7,7 @@
             [green.scaffold :as sc]
             [green.tofu :as tofu]
             [green.workflow :as wf]
-            [io.github.getcolors.once.compute :as compute]
+            [io.github.getcolors.netbird.compute :as compute]
             [io.github.getcolors.netbird.ssh-config :as ssh-config]
             [io.github.getcolors.netbird.validate :as validate]))
 
@@ -35,49 +35,8 @@
          (apply merge (map #(validate/tofu-env opts %) (conj (vec slots) :provider-backend))))))
 (defn backend-credential-env [opts] (credential-env opts))
 
-(def fallback-params
-  "What `build` and `--dry-run` render in place of a compute output: the
-  documentation address, shaped like the selected provider's real `params` so
-  every later stage sees the same keys either way. ONCE's."
-  compute/fallback-params)
-
-(def resolved-compute
-  "Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute
-  output carries no `ip`. ONCE's; `infrastructure-step` is what wires it."
-  compute/resolved-compute)
-
-;; ---------------------------------------------------------------- compute
-
-(defn infrastructure-data
-  "Template values for the compute stage. The name and the three source lists
-  are resolved here once, so a template interpolates values and never
-  branches on which provider it belongs to."
-  [opts]
-  (assoc opts
-         :ssh-keygen (validate/keygen? opts)
-         :compute-name (validate/compute-name opts)
-         :ssh-sources-hcl (tofu/hcl-list (cidrs opts (validate/compute-key opts "ssh-sources")))
-         :http-sources-hcl (tofu/hcl-list (cidrs opts (validate/compute-key opts "http-sources")))
-         :stun-sources-hcl (tofu/hcl-list (cidrs opts (validate/compute-key opts "stun-sources")))))
-
-(defn infrastructure-template
-  "Providers are selected by template directory, `infrastructure/<provider>/`,
-  not by conditionals inside one file; the rendered target is the same
-  `main.tf` whichever directory it came from."
-  [opts]
-  (template (str "infrastructure." (:provider-compute opts)) "main.tf"))
-
-(defn infrastructure-step [opts]
-  (let [dir (tool-dir opts infrastructure-tool)
-        specs [(spec (infrastructure-template opts) (str dir "/main.tf")
-                     (infrastructure-data opts))]
-        result (tofu/tofu-with-spec opts specs
-                                    {:dir dir :env (credential-env opts :provider-compute)})]
-    (cond
-      (wf/failed? result) result
-      (= :build (:green/event opts)) (merge result (fallback-params opts))
-      (= :delete (:green/event opts)) result
-      :else (resolved-compute result (fallback-params opts) (compute/output-params result)))))
+(defn fallback-params [opts] (when-not (or (= :build (:green/event opts)) (:green/dry-run opts)) (throw (ex-info "compute parameters unavailable" {}))) {:ip "192.0.2.10" :user "root" :sudoer "root" :name (validate/compute-name opts)})
+(def infrastructure-step compute/infrastructure-step)
 
 ;; -------------------------------------------------------------------- dns
 
@@ -123,7 +82,7 @@
   Standard §6)."
   [opts]
   (assoc opts
-         :ssh-keygen (validate/keygen? opts)
+         :ssh-keygen (if (:colors-compute/key opts) (= "managed" (get-in opts [:colors-compute/key :mode])) (validate/keygen? opts))
          :ssh-config-identity-file (ssh-config/identity-file opts)))
 
 (defn ansible-local-specs [opts]
@@ -153,7 +112,7 @@
   (json/generate-string
    {:all {:children {:netbird {:hosts {(:profile opts)
                                        {:ansible_host (or (:ip opts) "192.0.2.10")
-                                        :ansible_user "root"}}}}}}
+                                        :ansible_user (or (:user opts) "root")}}}}}}
    {:pretty true}))
 
 (defn ansible-data
@@ -169,7 +128,7 @@
   (assoc opts
          :ip (or (:ip opts) "192.0.2.10")
          :traefik-ip (validate/traefik-ip opts)
-         :ssh-keygen (validate/keygen? opts)))
+         :ssh-keygen (if (:colors-compute/key opts) (= "managed" (get-in opts [:colors-compute/key :mode])) (validate/keygen? opts))))
 
 (defn ansible-specs [opts]
   (let [dir (tool-dir opts ansible-tool) data (ansible-data opts)]
@@ -201,7 +160,7 @@
       (ansible/ansible-with-spec opts
         {:dir dir :inventory "inventory.json"
          :playbooks {:create "main.yml" :delete "cleanup.yml"}
-         :host-key-checking false}
+         :host-key-checking false :private-key (:ssh-private-key-path opts)}
         (ansible-specs opts)))))
 
 ;; ------------------------------------------------------------- acceptance

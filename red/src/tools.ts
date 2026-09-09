@@ -5,7 +5,7 @@ import * as tofu from "red/tofu";
 import { runtime } from "red/runtime";
 import type { Opts } from "red/workflow";
 import { failed } from "red/workflow";
-import { compute } from "package-once-red";
+import * as compute from "./compute.ts";
 import * as sshConfig from "./ssh-config.ts";
 import * as validate from "./validate.ts";
 
@@ -30,7 +30,6 @@ import ansibleBackupService from "../resources/tools/ansible/backup.service" wit
 import ansibleBackupFailureService from "../resources/tools/ansible/backup-failure.service" with { type: "text" };
 import ansibleBackupTimer from "../resources/tools/ansible/backup.timer" with { type: "text" };
 import dnsMainTf from "../resources/tools/dns/main.tf" with { type: "text" };
-import infrastructureVultrTf from "../resources/tools/infrastructure/vultr/main.tf" with { type: "text" };
 
 export const infrastructureTool = "netbird-infrastructure";
 export const dnsTool = "netbird-dns";
@@ -43,22 +42,6 @@ export function toolDir(opts: Opts, tool: string): string {
 }
 
 const template = (name: string, content: string): Template => ({ name, content });
-
-// The compute templates this colour carries, one static text import per
-// provider directory (`infrastructure/<provider>/main.tf`), keyed by the
-// registry name. Providers are selected by directory, never by conditionals
-// inside one file; the rendered target is the same `main.tf` whichever
-// directory it came from.
-const infrastructureTemplates: Record<string, string> = {
-  vultr: infrastructureVultrTf,
-};
-
-export function infrastructureTemplate(opts: Opts): Template {
-  const provider = String(opts["provider-compute"]);
-  const content = infrastructureTemplates[provider];
-  if (content === undefined) throw new Error(`template not found: infrastructure/${provider}/main.tf`);
-  return template(`infrastructure/${provider}/main.tf`, content);
-}
 
 function spec(source: Template, target: string, data: Opts): Spec {
   return { template: source, target, data, opts: templateOpts };
@@ -85,41 +68,8 @@ export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, st
 
 export const backendCredentialEnv = (opts: Opts) => credentialEnv(opts);
 
-// What `build` and `--dry-run` render in place of a compute output: the
-// documentation address, shaped like the selected provider's real `params` so
-// every later stage sees the same keys either way. ONCE's.
-export const fallbackParams = compute.fallbackParams;
-
-// Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute output
-// carries no `ip`. ONCE's; `infrastructureStep` is what wires it.
-export const resolvedCompute = compute.resolvedCompute;
-
-// ---------------------------------------------------------------- compute
-
-// Template values for the compute stage. The name and the three source lists
-// are resolved here once, so a template interpolates values and never branches
-// on which provider it belongs to.
-export function infrastructureData(opts: Opts): Opts {
-  return {
-    ...opts,
-    "ssh-keygen": validate.keygen(opts),
-    "compute-name": validate.computeName(opts),
-    "ssh-sources-hcl": tofu.hclList(cidrs(opts, validate.computeKey(opts, "ssh-sources"))),
-    "http-sources-hcl": tofu.hclList(cidrs(opts, validate.computeKey(opts, "http-sources"))),
-    "stun-sources-hcl": tofu.hclList(cidrs(opts, validate.computeKey(opts, "stun-sources"))),
-  };
-}
-
-export async function infrastructureStep(opts: Opts): Promise<Opts> {
-  const dir = toolDir(opts, infrastructureTool);
-  const specs = [spec(infrastructureTemplate(opts), `${dir}/main.tf`, infrastructureData(opts))];
-  const result = await tofu.tofuWithSpec(opts, specs,
-    { dir, env: credentialEnv(opts, "provider-compute") });
-  if (failed(result)) return result;
-  if (opts["red/event"] === "build") return { ...result, ...fallbackParams(opts) };
-  if (opts["red/event"] === "delete") return result;
-  return resolvedCompute(result, fallbackParams(opts), compute.outputParams(result));
-}
+export function fallbackParams(opts:Opts):Record<string,unknown>{if(opts['red/event']!=='build'&&!opts['red/dry-run'])throw new Error('compute parameters unavailable');return {ip:'192.0.2.10',user:'root',sudoer:'root',name:validate.computeName(opts)};}
+export const infrastructureStep=compute.infrastructureStep;
 
 // -------------------------------------------------------------------- dns
 
@@ -151,6 +101,7 @@ export function dnsJson(opts: Opts): string {
 }
 
 export async function dnsStep(opts: Opts): Promise<Opts> {
+  if(opts["netbird/already-destroyed"]) return opts;
   const dir = toolDir(opts, dnsTool);
   const data: Opts = {
     ...opts,
@@ -173,7 +124,7 @@ export async function dnsStep(opts: Opts): Promise<Opts> {
 export function ansibleLocalData(opts: Opts): Opts {
   return {
     ...opts,
-    "ssh-keygen": validate.keygen(opts),
+    "ssh-keygen": (opts['colors-compute/key'] ? (opts['colors-compute/key'] as any).mode === 'managed' : validate.keygen(opts)),
     "ssh-config-identity-file": sshConfig.identityFile(opts),
   };
 }
@@ -191,6 +142,7 @@ export function ansibleLocalSpecs(opts: Opts): Spec[] {
 // Write or remove the `~/.ssh/config` block. The same playbook serves both
 // events; `block_state` is what distinguishes them.
 export async function ansibleLocalStep(opts: Opts): Promise<Opts> {
+  if(opts["netbird/already-destroyed"]) return opts;
   const dir = toolDir(opts, ansibleLocalTool);
   const isDelete = opts["red/event"] === "delete";
   return ansible.ansibleWithSpec(opts, {
@@ -232,7 +184,7 @@ export function inventory(opts: Opts): string {
           hosts: {
             [String(opts.profile)]: {
               ansible_host: opts.ip ?? "192.0.2.10",
-              ansible_user: "root",
+              ansible_user: opts.user ?? "root",
             },
           },
         },
@@ -254,7 +206,7 @@ export function ansibleData(opts: Opts): Opts {
     ...opts,
     ip: opts.ip ?? "192.0.2.10",
     "traefik-ip": validate.traefikIp(opts),
-    "ssh-keygen": validate.keygen(opts),
+    "ssh-keygen": (opts['colors-compute/key'] ? (opts['colors-compute/key'] as any).mode === 'managed' : validate.keygen(opts)),
   };
 }
 
@@ -298,7 +250,7 @@ export async function ansibleStep(opts: Opts): Promise<Opts> {
     dir,
     inventory: "inventory.json",
     playbooks: { create: "main.yml", delete: "cleanup.yml" },
-    hostKeyChecking: false,
+    hostKeyChecking: false, privateKey: opts["ssh-private-key-path"] as string | undefined,
   }, ansibleSpecs(opts));
 }
 
