@@ -51,7 +51,7 @@
 ;; cannot resolve its own library says so rather than inventing a SHA or
 ;; silently falling back to whatever is lying around. `bb pin` refuses to stamp
 ;; a dirty or unpushed HEAD for the same reason.
-(def ^:private netbird-sha "3bf1c815231d135077503597d8fc124a91411a99")
+(def ^:private netbird-sha "8cd686a65ce8fb583f7aed0d722219c2596279f6")
 
 (def ^:private netbird-git-url "https://github.com/getcolors/netbird.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")

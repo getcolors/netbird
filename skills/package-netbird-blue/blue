@@ -4,7 +4,7 @@
 # dependencies = ["package-netbird-blue", "blue"]
 #
 # [tool.uv.sources]
-# package-netbird-blue = { git = "https://github.com/getcolors/netbird.git", rev = "3bf1c815231d135077503597d8fc124a91411a99", subdirectory = "blue" }
+# package-netbird-blue = { git = "https://github.com/getcolors/netbird.git", rev = "8cd686a65ce8fb583f7aed0d722219c2596279f6", subdirectory = "blue" }
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
 #
 # [tool.uv]
