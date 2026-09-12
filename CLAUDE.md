@@ -216,7 +216,7 @@ must not touch `~/.ssh`.
 
 ## Coupling
 
-The package pins `colors-compute` at `3451a05e719b0ad6809f3c88b241a8c010b8f58b` in each native manifest and the Red facade. ONCE at `a1fe1be7a427dd2e406ff7befd1c43a53e7c3618` supplies application domain helpers. Each consumer chooses its compute library version. SDK pins remain compatible with that library. Working-tree overrides are for development; final launchers carry pushed immutable package SHAs produced by `bb pin`.
+The package pins `colors-compute` at `ae28ea74962bb1897fa6365c143c1d43ac1fe095` in each native manifest and the Red facade. ONCE at `a1fe1be7a427dd2e406ff7befd1c43a53e7c3618` supplies application domain helpers. Each consumer chooses its compute library version. SDK pins remain compatible with that library. Working-tree overrides are for development; final launchers carry pushed immutable package SHAs produced by `bb pin`.
 
 ## Documentation
 
